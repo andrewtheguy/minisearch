@@ -151,9 +151,9 @@ function BrowseView({ profileName, prefix }: { profileName: string; prefix: stri
   const [files, setFiles] = useState<BrowseFile[]>([]);
   const [browseLoading, setBrowseLoading] = useState(true);
   const [browseError, setBrowseError] = useState<string | null>(null);
-  const [continuationToken, setContinuationToken] = useState<string | null>(null);
   const [isTruncated, setIsTruncated] = useState(false);
-  const [loadingMore, setLoadingMore] = useState(false);
+  const [browsePageIndex, setBrowsePageIndex] = useState(0);
+  const [pageTokens, setPageTokens] = useState<Array<string | null>>([null]);
   const browseControllerRef = useRef<AbortController | null>(null);
 
   const [query, setQuery] = useState("");
@@ -168,72 +168,59 @@ function BrowseView({ profileName, prefix }: { profileName: string; prefix: stri
   const [extPreset, setExtPreset] = useState("");
   const searchControllerRef = useRef<AbortController | null>(null);
 
+  const fetchBrowsePage = useCallback(
+    (token: string | null, pageIdx: number) => {
+      browseControllerRef.current?.abort();
+      const controller = new AbortController();
+      browseControllerRef.current = controller;
+
+      setBrowseLoading(true);
+      setBrowseError(null);
+
+      const params = new URLSearchParams();
+      if (prefix) params.set("prefix", prefix);
+      if (token) params.set("continuation_token", token);
+
+      fetch(`/api/p/${profileName}/browse?${params}`, { signal: controller.signal })
+        .then((res) => {
+          if (!res.ok) throw new Error(`HTTP ${res.status}`);
+          return res.json() as Promise<BrowseResponse>;
+        })
+        .then((data) => {
+          if (browseControllerRef.current !== controller) return;
+          setFolders(data.folders);
+          setFiles(data.files);
+          setIsTruncated(data.is_truncated);
+          setBrowsePageIndex(pageIdx);
+          if (data.next_continuation_token) {
+            setPageTokens((prev) => {
+              const next = [...prev];
+              next[pageIdx + 1] = data.next_continuation_token;
+              return next;
+            });
+          }
+        })
+        .catch((err) => {
+          if (err instanceof DOMException && err.name === "AbortError") return;
+          if (browseControllerRef.current === controller) {
+            setBrowseError(err instanceof Error ? err.message : String(err));
+          }
+        })
+        .finally(() => {
+          if (browseControllerRef.current === controller) setBrowseLoading(false);
+        });
+    },
+    [profileName, prefix],
+  );
+
   useEffect(() => {
-    browseControllerRef.current?.abort();
-    const controller = new AbortController();
-    browseControllerRef.current = controller;
-
-    setBrowseLoading(true);
-    setBrowseError(null);
-    setFolders([]);
-    setFiles([]);
-    setContinuationToken(null);
-    setIsTruncated(false);
-
-    const params = new URLSearchParams();
-    if (prefix) params.set("prefix", prefix);
-
-    fetch(`/api/p/${profileName}/browse?${params}`, { signal: controller.signal })
-      .then((res) => {
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        return res.json() as Promise<BrowseResponse>;
-      })
-      .then((data) => {
-        if (browseControllerRef.current !== controller) return;
-        setFolders(data.folders);
-        setFiles(data.files);
-        setIsTruncated(data.is_truncated);
-        setContinuationToken(data.next_continuation_token);
-      })
-      .catch((err) => {
-        if (err instanceof DOMException && err.name === "AbortError") return;
-        if (browseControllerRef.current === controller) {
-          setBrowseError(err instanceof Error ? err.message : String(err));
-        }
-      })
-      .finally(() => {
-        if (browseControllerRef.current === controller) setBrowseLoading(false);
-      });
-
+    setBrowsePageIndex(0);
+    setPageTokens([null]);
+    fetchBrowsePage(null, 0);
     return () => {
-      controller.abort();
+      browseControllerRef.current?.abort();
     };
-  }, [profileName, prefix]);
-
-  function handleLoadMore() {
-    if (!continuationToken || loadingMore) return;
-    setLoadingMore(true);
-
-    const params = new URLSearchParams();
-    if (prefix) params.set("prefix", prefix);
-    params.set("continuation_token", continuationToken);
-
-    fetch(`/api/p/${profileName}/browse?${params}`)
-      .then((res) => {
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        return res.json() as Promise<BrowseResponse>;
-      })
-      .then((data) => {
-        setFolders((prev) => [...prev, ...data.folders]);
-        setFiles((prev) => [...prev, ...data.files]);
-        setIsTruncated(data.is_truncated);
-        setContinuationToken(data.next_continuation_token);
-      })
-      .catch((err) => {
-        setBrowseError(err instanceof Error ? err.message : String(err));
-      })
-      .finally(() => setLoadingMore(false));
-  }
+  }, [fetchBrowsePage]);
 
   const doSearch = useCallback(
     (q: string, p: number, m: SearchMode, e: string) => {
@@ -584,12 +571,36 @@ function BrowseView({ profileName, prefix }: { profileName: string; prefix: stri
                 </div>
               )}
 
-              {isTruncated && (
-                <div className="pt-4 text-center">
-                  <Button variant="outline" onClick={handleLoadMore} disabled={loadingMore}>
-                    {loadingMore ? "Loading..." : "Load more"}
+              {(browsePageIndex > 0 || isTruncated) && (
+                <nav className="flex items-center justify-center gap-2 pt-4">
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    disabled={browsePageIndex === 0 || browseLoading}
+                    onClick={() =>
+                      fetchBrowsePage(
+                        pageTokens[browsePageIndex - 1] ?? null,
+                        browsePageIndex - 1,
+                      )
+                    }
+                  >
+                    Previous
                   </Button>
-                </div>
+                  <span className="text-sm text-muted-foreground">Page {browsePageIndex + 1}</span>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    disabled={!isTruncated || browseLoading}
+                    onClick={() =>
+                      fetchBrowsePage(
+                        pageTokens[browsePageIndex + 1] ?? null,
+                        browsePageIndex + 1,
+                      )
+                    }
+                  >
+                    Next
+                  </Button>
+                </nav>
               )}
             </>
           )}

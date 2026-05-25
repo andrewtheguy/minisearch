@@ -177,10 +177,10 @@ pub async fn search(
     }
 
     let page = params.page.unwrap_or(1).max(1);
-    let offset = (page - 1) * SEARCH_RESULT_LIMIT;
+    let offset = (page - 1) * PAGE_LIMIT;
 
     let (total_count, top_docs) = searcher
-        .search(&query, &(Count, TopDocs::with_limit(SEARCH_RESULT_LIMIT).and_offset(offset).order_by_score()))
+        .search(&query, &(Count, TopDocs::with_limit(PAGE_LIMIT).and_offset(offset).order_by_score()))
         .context("search failed")?;
 
     let snippet_terms = query_terms_for_field(&*query, schema.content);
@@ -222,19 +222,19 @@ pub async fn search(
         });
     }
 
-    let total_pages = if total_count == 0 { 0 } else { total_count.div_ceil(SEARCH_RESULT_LIMIT) };
+    let total_pages = if total_count == 0 { 0 } else { total_count.div_ceil(PAGE_LIMIT) };
 
     Ok(Json(SearchResponse {
         query: query_str,
         count: total_count,
-        limit: SEARCH_RESULT_LIMIT,
+        limit: PAGE_LIMIT,
         page,
         total_pages,
         results,
     }))
 }
 
-const SEARCH_RESULT_LIMIT: usize = 20;
+const PAGE_LIMIT: usize = 10;
 const MAX_SNIPPET_CHARS: usize = 150;
 
 fn query_terms_for_field(query: &dyn TantivyQuery, field: Field) -> BTreeSet<String> {
@@ -575,7 +575,7 @@ pub async fn browse(
         .bucket(&profile.state.bucket_name)
         .delimiter("/")
         .prefix(&prefix)
-        .max_keys(1000);
+        .max_keys(PAGE_LIMIT as i32);
 
     if let Some(token) = &params.continuation_token {
         req = req.continuation_token(token);
