@@ -5,3 +5,4 @@
 - use tmp/ for temporary files and test config toml
 - error handling: `anyhow` for application errors (main, indexer, search), `thiserror` for typed API errors (`AppError` in `src/error.rs`); internal errors return generic "internal server error" to clients, detailed chain logged to stderr
 - `S3_BUCKET_NAME` and `AWS_ENDPOINT_URL` are read once in `search::index_path()` and shared via `IndexPathResult`; do not duplicate env reads
+- architectural docs in `docs/architecture.md`
