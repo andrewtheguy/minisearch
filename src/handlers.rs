@@ -51,12 +51,12 @@ pub struct SearchSnippetSegment {
 
 fn get_or_init_search(state: &AppState) -> Result<SearchState, AppError> {
     {
-        let guard = state.search.read().unwrap();
+        let guard = state.search.read().unwrap_or_else(|e| e.into_inner());
         if let Some(s) = guard.as_ref() {
             return Ok(s.clone());
         }
     }
-    let mut guard = state.search.write().unwrap();
+    let mut guard = state.search.write().unwrap_or_else(|e| e.into_inner());
     if let Some(s) = guard.as_ref() {
         return Ok(s.clone());
     }
