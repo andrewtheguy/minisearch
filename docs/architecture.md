@@ -9,12 +9,12 @@ MiniSearch is a full-text search application for S3 objects. It indexes file con
                   │  S3 Buckets  │
                   └──────┬───────┘
                          │
-              ┌──────────┴──────────┐
-              │                     │
-        ┌─────▼─────┐        ┌─────▼─────┐
-        │  Indexer   │        │  Presign  │
-        │ (CLI mode) │        │ (runtime) │
-        └─────┬──────┘        └───────────┘
+              ┌──────────┼──────────┐
+              │          │          │
+        ┌─────▼─────┐ ┌─▼───────┐ ┌▼─────────┐
+        │  Indexer   │ │ Browse  │ │  Presign  │
+        │ (CLI mode) │ │(runtime)│ │ (runtime) │
+        └─────┬──────┘ └─────────┘ └───────────┘
               │
         ┌─────▼──────┐
         │  Tantivy   │
@@ -50,7 +50,7 @@ Configuration is loaded from a TOML file (`-c`/`--config` flag or `MINISEARCH_CO
 | `state.rs` | Per-profile shared state (`ProfileEntry`, `ProfileState`) organized in `AppState` |
 | `search.rs` | Tantivy schema definition, tokenizer registration, index open/create |
 | `indexer.rs` | S3 object listing, content downloading, incremental index updates |
-| `handlers.rs` | Axum request handlers for profile listing, search, presign, and health endpoints |
+| `handlers.rs` | Axum request handlers for profile listing, search, browse, presign, and health endpoints |
 | `error.rs` | `AppError` enum — maps error variants to HTTP status codes |
 | `assets.rs` | Embedded frontend asset serving with SPA fallback |
 
@@ -81,7 +81,8 @@ Each profile's index is stored at the path specified by `tantivy_index_path` in 
 | Path | Description |
 |---|---|
 | `/` | Profile list — shows all configured profiles with descriptions |
-| `/p/<name>` | Search UI scoped to a specific profile |
+| `/p/<name>` | Redirects to `/p/<name>/browse/` |
+| `/p/<name>/browse/*` | Browse and search UI — S3 folder browser with inline search |
 
 ### API endpoints
 
@@ -89,6 +90,7 @@ Each profile's index is stored at the path specified by `tantivy_index_path` in 
 |---|---|---|---|
 | `/api/profiles` | GET | JSON array of `{ name, description }` for each profile | - |
 | `/api/p/:profile/search?q=` | GET | JSON search results with structured snippet text segments, byte offsets, and highlight flags | `400` for missing/invalid query; `404` for unknown profile; `503` when no index exists; `500` generic "internal server error" (details logged server-side) |
+| `/api/p/:profile/browse?prefix=&continuation_token=` | GET | JSON listing of folders and files at the given S3 prefix | `404` for unknown profile; `500` generic "internal server error" (details logged server-side) |
 | `/api/p/:profile/presign?key=` | GET | Temporary redirect to a time-limited S3 presigned URL | `400` for missing key; `404` for unknown profile; `500` generic "internal server error" (details logged server-side) |
 | `/api/health` | GET | `ok` | - |
 | `/*` | GET | Serves embedded frontend assets (SPA fallback to `index.html`) | - |
@@ -121,6 +123,31 @@ Results include structured snippet segments that indicate which portions of the 
 ```
 
 Snippet generation selects the best 150-character fragment with the most query term matches and splits it into highlighted/non-highlighted segments.
+
+### Browse response
+
+The browse endpoint lists S3 objects at a given prefix using delimiter-based folder navigation (S3 `list_objects_v2` with `Delimiter=/`). Folders come from `CommonPrefixes`, files from `Contents`.
+
+```json
+{
+  "prefix": "transcripts/rthk-radio1/",
+  "folders": [
+    { "key": "transcripts/rthk-radio1/2026/", "name": "2026/" }
+  ],
+  "files": [
+    {
+      "key": "transcripts/rthk-radio1/file.json",
+      "name": "file.json",
+      "size": 51973,
+      "last_modified": "2026-05-14T03:53:44.384Z"
+    }
+  ],
+  "is_truncated": false,
+  "next_continuation_token": null
+}
+```
+
+Pagination uses S3 continuation tokens. Each request returns up to 1000 items; when `is_truncated` is true, the frontend can fetch the next page by passing `next_continuation_token`.
 
 ### Shared state
 
@@ -165,12 +192,13 @@ The search reader is lazily initialized on first query per profile. This allows 
 
 ### Key behaviors
 
-- **Profile routing**: root path (`/`) shows a list of all configured profiles; `/p/<name>` shows the search UI scoped to that profile.
-- **URL-synchronized search state**: query, page number, search mode, and extension filter are reflected in URL parameters (`/p/<name>?q=...&page=...`) for shareability and browser history navigation.
-- **Request cancellation**: uses `AbortController` to cancel in-flight searches when a new query is submitted.
+- **Profile routing**: root path (`/`) shows a list of all configured profiles; `/p/<name>` redirects to `/p/<name>/browse/`.
+- **Browse view**: the default view is an S3 folder browser with breadcrumb navigation. Folders are navigable via URL path segments (`/p/<name>/browse/transcripts/rthk-radio1/`). Clicking a file opens it in a new window via the presign endpoint. Paginated with a "Load more" button when results exceed 1000 items.
+- **Inline search**: a search bar is always visible above the browse listing. Submitting a search replaces the folder listing with search results inline; a "Clear" button returns to browse mode.
+- **Request cancellation**: uses `AbortController` to cancel in-flight searches and browse requests.
 - **Snippet rendering**: displays search result snippets with `<mark>` tags on highlighted terms.
-- **File access**: result links point to `/api/p/<profile>/presign?key=...`, which redirects to a temporary S3 URL.
-- **Pagination**: first/previous/next/last page controls with scroll-to-top on page change.
+- **File access**: result links and file rows point to `/api/p/<profile>/presign?key=...`, which redirects to a temporary S3 URL.
+- **Search pagination**: first/previous/next/last page controls with scroll-to-top on page change.
 
 ## Build and deployment
 

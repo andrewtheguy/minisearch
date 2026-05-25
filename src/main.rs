@@ -73,6 +73,7 @@ async fn main() -> anyhow::Result<()> {
                 .route("/api/profiles", get(handlers::profiles))
                 .route("/api/p/{profile}/search", get(handlers::search))
                 .route("/api/p/{profile}/presign", get(handlers::presign))
+                .route("/api/p/{profile}/browse", get(handlers::browse))
                 .with_state(state)
                 .fallback(assets::static_handler);
 

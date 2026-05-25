@@ -1,5 +1,5 @@
 import { type FormEvent, useCallback, useEffect, useRef, useState } from "react";
-import { Link, Navigate, Route, Routes, useParams, useSearchParams } from "react-router";
+import { Link, Navigate, Route, Routes, useNavigate, useParams } from "react-router";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
@@ -34,6 +34,26 @@ interface ProfileInfo {
   description: string;
 }
 
+interface BrowseFolder {
+  key: string;
+  name: string;
+}
+
+interface BrowseFile {
+  key: string;
+  name: string;
+  size: number;
+  last_modified: string;
+}
+
+interface BrowseResponse {
+  prefix: string;
+  folders: BrowseFolder[];
+  files: BrowseFile[];
+  is_truncated: boolean;
+  next_continuation_token: string | null;
+}
+
 type SearchMode = "both" | "filename" | "content";
 
 function formatBytes(bytes: number): string {
@@ -52,25 +72,6 @@ const EXT_PRESETS: Record<string, string> = {
   data: "csv,tsv,json,jsonl,ndjson,xml,sql",
   shell: "sh,bash,zsh,fish,ps1",
 };
-
-function extToSet(ext: string): Set<string> {
-  return new Set(
-    ext
-      .split(",")
-      .map((s) => s.trim().toLowerCase())
-      .filter(Boolean),
-  );
-}
-
-function matchPreset(ext: string): string {
-  if (!ext.trim()) return "";
-  const current = extToSet(ext);
-  for (const [key, value] of Object.entries(EXT_PRESETS)) {
-    const preset = extToSet(value);
-    if (current.size === preset.size && [...current].every((e) => preset.has(e))) return key;
-  }
-  return "custom";
-}
 
 function getPageNumbers(current: number, total: number): (number | "ellipsis")[] {
   if (total <= 7) {
@@ -119,7 +120,7 @@ function ProfileList() {
       {profiles && profiles.length > 0 && (
         <div className="space-y-3">
           {profiles.map((profile) => (
-            <Link key={profile.name} to={`/p/${profile.name}`} className="block">
+            <Link key={profile.name} to={`/p/${profile.name}/browse/`} className="block">
               <Card className="hover:border-primary/50 transition-colors">
                 <CardContent>
                   <h2 className="text-lg font-semibold">{profile.name}</h2>
@@ -136,47 +137,118 @@ function ProfileList() {
   );
 }
 
-function SearchViewGuard() {
-  const { profileName } = useParams<{ profileName: string }>();
+function BrowseViewGuard() {
+  const { profileName, "*": splatPath } = useParams<{ profileName: string; "*": string }>();
   if (!profileName) return <Navigate to="/" replace />;
-  return <SearchView profileName={profileName} />;
+  const prefix = splatPath || "";
+  return <BrowseView profileName={profileName} prefix={prefix} />;
 }
 
-function SearchView({ profileName }: { profileName: string }) {
-  const [searchParams, setSearchParams] = useSearchParams();
+function BrowseView({ profileName, prefix }: { profileName: string; prefix: string }) {
+  const navigate = useNavigate();
 
-  const [query, setQuery] = useState(() => searchParams.get("q") || "");
-  const [results, setResults] = useState<SearchResult[] | null>(null);
+  const [folders, setFolders] = useState<BrowseFolder[]>([]);
+  const [files, setFiles] = useState<BrowseFile[]>([]);
+  const [browseLoading, setBrowseLoading] = useState(true);
+  const [browseError, setBrowseError] = useState<string | null>(null);
+  const [continuationToken, setContinuationToken] = useState<string | null>(null);
+  const [isTruncated, setIsTruncated] = useState(false);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const browseControllerRef = useRef<AbortController | null>(null);
+
+  const [query, setQuery] = useState("");
+  const [searchResults, setSearchResults] = useState<SearchResult[] | null>(null);
   const [totalCount, setTotalCount] = useState<number | null>(null);
-  const [page, setPage] = useState(() => {
-    const p = Number.parseInt(searchParams.get("page") || "1", 10);
-    return p >= 1 ? p : 1;
-  });
+  const [page, setPage] = useState(1);
   const [totalPages, setTotalPages] = useState(0);
   const [searching, setSearching] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [mode, setMode] = useState<SearchMode>(() => {
-    const m = searchParams.get("mode");
-    if (m === "filename" || m === "content") return m;
-    return "both";
-  });
-  const [ext, setExt] = useState(() => searchParams.get("ext") || "");
-  const [extPreset, setExtPreset] = useState(() => matchPreset(searchParams.get("ext") || ""));
-  const currentSearchController = useRef<AbortController | null>(null);
+  const [searchError, setSearchError] = useState<string | null>(null);
+  const [mode, setMode] = useState<SearchMode>("both");
+  const [ext, setExt] = useState("");
+  const [extPreset, setExtPreset] = useState("");
+  const searchControllerRef = useRef<AbortController | null>(null);
+
+  useEffect(() => {
+    browseControllerRef.current?.abort();
+    const controller = new AbortController();
+    browseControllerRef.current = controller;
+
+    setBrowseLoading(true);
+    setBrowseError(null);
+    setFolders([]);
+    setFiles([]);
+    setContinuationToken(null);
+    setIsTruncated(false);
+
+    const params = new URLSearchParams();
+    if (prefix) params.set("prefix", prefix);
+
+    fetch(`/api/p/${profileName}/browse?${params}`, { signal: controller.signal })
+      .then((res) => {
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        return res.json() as Promise<BrowseResponse>;
+      })
+      .then((data) => {
+        if (browseControllerRef.current !== controller) return;
+        setFolders(data.folders);
+        setFiles(data.files);
+        setIsTruncated(data.is_truncated);
+        setContinuationToken(data.next_continuation_token);
+      })
+      .catch((err) => {
+        if (err instanceof DOMException && err.name === "AbortError") return;
+        if (browseControllerRef.current === controller) {
+          setBrowseError(err instanceof Error ? err.message : String(err));
+        }
+      })
+      .finally(() => {
+        if (browseControllerRef.current === controller) setBrowseLoading(false);
+      });
+
+    return () => {
+      controller.abort();
+    };
+  }, [profileName, prefix]);
+
+  function handleLoadMore() {
+    if (!continuationToken || loadingMore) return;
+    setLoadingMore(true);
+
+    const params = new URLSearchParams();
+    if (prefix) params.set("prefix", prefix);
+    params.set("continuation_token", continuationToken);
+
+    fetch(`/api/p/${profileName}/browse?${params}`)
+      .then((res) => {
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        return res.json() as Promise<BrowseResponse>;
+      })
+      .then((data) => {
+        setFolders((prev) => [...prev, ...data.folders]);
+        setFiles((prev) => [...prev, ...data.files]);
+        setIsTruncated(data.is_truncated);
+        setContinuationToken(data.next_continuation_token);
+      })
+      .catch((err) => {
+        setBrowseError(err instanceof Error ? err.message : String(err));
+      })
+      .finally(() => setLoadingMore(false));
+  }
 
   const doSearch = useCallback(
     (q: string, p: number, m: SearchMode, e: string) => {
-      currentSearchController.current?.abort();
+      searchControllerRef.current?.abort();
       const controller = new AbortController();
-      currentSearchController.current = controller;
+      searchControllerRef.current = controller;
 
       setSearching(true);
-      setError(null);
+      setSearchError(null);
 
       const params = new URLSearchParams({ q });
       if (p > 1) params.set("page", String(p));
       if (m !== "both") params.set("mode", m);
       if (e.trim()) params.set("ext", e.trim());
+      if (prefix) params.set("prefix", prefix);
 
       fetch(`/api/p/${profileName}/search?${params}`, { signal: controller.signal })
         .then((res) => {
@@ -184,87 +256,58 @@ function SearchView({ profileName }: { profileName: string }) {
           return res.json() as Promise<SearchResponse>;
         })
         .then((data) => {
-          if (currentSearchController.current !== controller) return;
-          setResults(data.results);
+          if (searchControllerRef.current !== controller) return;
+          setSearchResults(data.results);
           setTotalCount(data.count);
           setTotalPages(data.total_pages);
         })
         .catch((err) => {
           if (err instanceof DOMException && err.name === "AbortError") return;
-          if (currentSearchController.current === controller) {
-            setError(err instanceof Error ? err.message : String(err));
+          if (searchControllerRef.current === controller) {
+            setSearchError(err instanceof Error ? err.message : String(err));
           }
         })
         .finally(() => {
-          if (currentSearchController.current === controller) {
-            currentSearchController.current = null;
+          if (searchControllerRef.current === controller) {
+            searchControllerRef.current = null;
             setSearching(false);
           }
         });
     },
-    [profileName],
+    [profileName, prefix],
   );
-
-  const doSearchRef = useRef(doSearch);
-  doSearchRef.current = doSearch;
-
-  useEffect(() => {
-    const params = new URLSearchParams(window.location.search);
-    const q = params.get("q") || "";
-    if (q) {
-      const p = Number.parseInt(params.get("page") || "1", 10);
-      const m = params.get("mode");
-      const initialMode: SearchMode = m === "filename" || m === "content" ? m : "both";
-      const e = params.get("ext") || "";
-      doSearchRef.current(q, p >= 1 ? p : 1, initialMode, e);
-    }
-
-    return () => {
-      currentSearchController.current?.abort();
-      currentSearchController.current = null;
-    };
-  }, []);
-
-  function searchAndUpdateUrl(q: string, p: number, m: SearchMode, e: string) {
-    const params = new URLSearchParams();
-    if (q.trim()) params.set("q", q.trim());
-    if (p > 1) params.set("page", String(p));
-    if (m !== "both") params.set("mode", m);
-    if (e.trim()) params.set("ext", e.trim());
-    setSearchParams(params);
-    doSearch(q, p, m, e);
-  }
 
   function handleSearch(e: FormEvent) {
     e.preventDefault();
     const q = query.trim();
     if (!q) return;
-
     setPage(1);
-    searchAndUpdateUrl(q, 1, mode, ext);
+    doSearch(q, 1, mode, ext);
   }
 
   function handlePageChange(newPage: number) {
     setPage(newPage);
     window.scrollTo({ top: 0, behavior: "smooth" });
-    searchAndUpdateUrl(query.trim(), newPage, mode, ext);
+    doSearch(query.trim(), newPage, mode, ext);
   }
 
-  function handleClear() {
-    currentSearchController.current?.abort();
-    currentSearchController.current = null;
+  function handleClearSearch() {
+    searchControllerRef.current?.abort();
+    searchControllerRef.current = null;
     setQuery("");
-    setResults(null);
+    setSearchResults(null);
     setTotalCount(null);
     setPage(1);
     setTotalPages(0);
     setSearching(false);
-    setError(null);
+    setSearchError(null);
     setMode("both");
     setExt("");
     setExtPreset("");
-    setSearchParams(new URLSearchParams());
   }
+
+  const segments = prefix ? prefix.replace(/\/$/, "").split("/") : [];
+  const isSearchActive = searchResults !== null;
 
   return (
     <div className="mx-auto max-w-4xl px-4 py-8">
@@ -286,8 +329,8 @@ function SearchView({ profileName }: { profileName: string }) {
         <Button type="submit" disabled={searching}>
           Search
         </Button>
-        {results !== null && (
-          <Button type="button" variant="outline" onClick={handleClear}>
+        {isSearchActive && (
+          <Button type="button" variant="outline" onClick={handleClearSearch}>
             Clear
           </Button>
         )}
@@ -351,109 +394,206 @@ function SearchView({ profileName }: { profileName: string }) {
         </fieldset>
       </div>
 
-      {searching && <p className="text-muted-foreground">Searching...</p>}
-
-      {error && (
-        <Alert variant="destructive" className="mb-4">
-          <AlertDescription>Error: {error}</AlertDescription>
-        </Alert>
-      )}
-
-      {results !== null && !searching && !error && (
+      {isSearchActive ? (
         <div className="space-y-3">
-          <p className="text-sm text-muted-foreground">
-            {totalCount !== null && totalPages > 1
-              ? `Page ${page} of ${totalPages} (${totalCount} results)`
-              : `${results.length} result${results.length !== 1 ? "s" : ""} found`}
-          </p>
-          {results.map((result) => (
-            <Card key={result.key}>
-              <CardContent>
-                <a
-                  className="text-primary font-semibold hover:underline block mb-1"
-                  href={`/api/p/${profileName}/presign?key=${encodeURIComponent(result.key)}`}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                >
-                  {result.key}
-                </a>
-                <p className="text-sm text-muted-foreground mb-2">
-                  {formatBytes(result.size)} &middot;{" "}
-                  {new Date(result.last_modified).toLocaleString()}
-                </p>
-                <div className="text-sm leading-relaxed font-mono">
-                  {result.snippet.map((segment) =>
-                    segment.highlighted ? (
-                      <mark
-                        key={`${segment.start}-${segment.end}-highlight`}
-                        className="bg-yellow-100 dark:bg-yellow-900/50 px-0.5 rounded-sm"
+          {searching && <p className="text-muted-foreground">Searching...</p>}
+
+          {searchError && (
+            <Alert variant="destructive" className="mb-4">
+              <AlertDescription>Error: {searchError}</AlertDescription>
+            </Alert>
+          )}
+
+          {!searching && !searchError && (
+            <>
+              <p className="text-sm text-muted-foreground">
+                {totalCount !== null && totalPages > 1
+                  ? `Page ${page} of ${totalPages} (${totalCount} results)`
+                  : `${searchResults.length} result${searchResults.length !== 1 ? "s" : ""} found`}
+              </p>
+              {searchResults.map((result) => (
+                <Card key={result.key}>
+                  <CardContent>
+                    <a
+                      className="text-primary font-semibold hover:underline block mb-1"
+                      href={`/api/p/${profileName}/presign?key=${encodeURIComponent(result.key)}`}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                    >
+                      {result.key}
+                    </a>
+                    <p className="text-sm text-muted-foreground mb-2">
+                      {formatBytes(result.size)} &middot;{" "}
+                      {new Date(result.last_modified).toLocaleString()}
+                    </p>
+                    <div className="text-sm leading-relaxed font-mono">
+                      {result.snippet.map((segment) =>
+                        segment.highlighted ? (
+                          <mark
+                            key={`${segment.start}-${segment.end}-highlight`}
+                            className="bg-yellow-100 dark:bg-yellow-900/50 px-0.5 rounded-sm"
+                          >
+                            {segment.text}
+                          </mark>
+                        ) : (
+                          <span key={`${segment.start}-${segment.end}-text`}>{segment.text}</span>
+                        ),
+                      )}
+                    </div>
+                  </CardContent>
+                </Card>
+              ))}
+              {totalPages > 1 && (
+                <nav className="flex items-center justify-center gap-1 pt-4">
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    disabled={page <= 1}
+                    onClick={() => handlePageChange(1)}
+                  >
+                    First
+                  </Button>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    disabled={page <= 1}
+                    onClick={() => handlePageChange(page - 1)}
+                  >
+                    Previous
+                  </Button>
+                  {getPageNumbers(page, totalPages).map((p, i) =>
+                    p === "ellipsis" ? (
+                      <span
+                        key={`ellipsis-${i === 1 ? "start" : "end"}`}
+                        className="px-1 text-sm text-muted-foreground"
                       >
-                        {segment.text}
-                      </mark>
+                        ...
+                      </span>
                     ) : (
-                      <span key={`${segment.start}-${segment.end}-text`}>{segment.text}</span>
+                      <Button
+                        key={p}
+                        variant={p === page ? "default" : "outline"}
+                        size="sm"
+                        onClick={() => handlePageChange(p)}
+                      >
+                        {p}
+                      </Button>
                     ),
                   )}
-                </div>
-              </CardContent>
-            </Card>
-          ))}
-          {totalPages > 1 && (
-            <nav className="flex items-center justify-center gap-1 pt-4">
-              <Button
-                variant="outline"
-                size="sm"
-                disabled={page <= 1}
-                onClick={() => handlePageChange(1)}
-              >
-                First
-              </Button>
-              <Button
-                variant="outline"
-                size="sm"
-                disabled={page <= 1}
-                onClick={() => handlePageChange(page - 1)}
-              >
-                Previous
-              </Button>
-              {getPageNumbers(page, totalPages).map((p, i) =>
-                p === "ellipsis" ? (
-                  <span
-                    key={`ellipsis-${i === 1 ? "start" : "end"}`}
-                    className="px-1 text-sm text-muted-foreground"
-                  >
-                    ...
-                  </span>
-                ) : (
                   <Button
-                    key={p}
-                    variant={p === page ? "default" : "outline"}
+                    variant="outline"
                     size="sm"
-                    onClick={() => handlePageChange(p)}
+                    disabled={page >= totalPages}
+                    onClick={() => handlePageChange(page + 1)}
                   >
-                    {p}
+                    Next
                   </Button>
-                ),
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    disabled={page >= totalPages}
+                    onClick={() => handlePageChange(totalPages)}
+                  >
+                    Last
+                  </Button>
+                </nav>
               )}
-              <Button
-                variant="outline"
-                size="sm"
-                disabled={page >= totalPages}
-                onClick={() => handlePageChange(page + 1)}
-              >
-                Next
-              </Button>
-              <Button
-                variant="outline"
-                size="sm"
-                disabled={page >= totalPages}
-                onClick={() => handlePageChange(totalPages)}
-              >
-                Last
-              </Button>
-            </nav>
+            </>
           )}
         </div>
+      ) : (
+        <>
+          <nav className="flex items-center gap-1 text-sm mb-4 flex-wrap">
+            <button
+              type="button"
+              className={`hover:underline ${prefix ? "text-primary" : "font-semibold text-foreground"}`}
+              onClick={() => prefix && navigate(`/p/${profileName}/browse/`)}
+              disabled={!prefix}
+            >
+              Root
+            </button>
+            {segments.map((seg, i) => {
+              const segPrefix = `${segments.slice(0, i + 1).join("/")}/`;
+              const isLast = i === segments.length - 1;
+              return (
+                <span key={segPrefix} className="flex items-center gap-1">
+                  <span className="text-muted-foreground">/</span>
+                  <button
+                    type="button"
+                    className={`hover:underline ${isLast ? "font-semibold text-foreground" : "text-primary"}`}
+                    onClick={() => !isLast && navigate(`/p/${profileName}/browse/${segPrefix}`)}
+                    disabled={isLast}
+                  >
+                    {seg}
+                  </button>
+                </span>
+              );
+            })}
+          </nav>
+
+          {browseLoading && <p className="text-muted-foreground">Loading...</p>}
+
+          {browseError && (
+            <Alert variant="destructive" className="mb-4">
+              <AlertDescription>Error: {browseError}</AlertDescription>
+            </Alert>
+          )}
+
+          {!browseLoading && !browseError && (
+            <>
+              {folders.length === 0 && files.length === 0 && (
+                <p className="text-muted-foreground">This folder is empty.</p>
+              )}
+
+              {folders.length > 0 && (
+                <div className="space-y-1 mb-4">
+                  {folders.map((folder) => (
+                    <button
+                      key={folder.key}
+                      type="button"
+                      className="w-full text-left px-3 py-2 rounded-md hover:bg-accent transition-colors flex items-center gap-2"
+                      onClick={() => navigate(`/p/${profileName}/browse/${folder.key}`)}
+                    >
+                      <span className="text-muted-foreground">&#128193;</span>
+                      <span className="font-medium">{folder.name}</span>
+                    </button>
+                  ))}
+                </div>
+              )}
+
+              {files.length > 0 && (
+                <div className="space-y-1">
+                  {files.map((file) => (
+                    <a
+                      key={file.key}
+                      className="w-full text-left px-3 py-2 rounded-md hover:bg-accent transition-colors flex items-center gap-2"
+                      href={`/api/p/${profileName}/presign?key=${encodeURIComponent(file.key)}`}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                    >
+                      <span className="text-muted-foreground">&#128196;</span>
+                      <span className="flex-1 font-medium">{file.name}</span>
+                      <span className="text-sm text-muted-foreground">
+                        {formatBytes(file.size)}
+                      </span>
+                      <span className="text-sm text-muted-foreground">
+                        {file.last_modified ? new Date(file.last_modified).toLocaleString() : ""}
+                      </span>
+                    </a>
+                  ))}
+                </div>
+              )}
+
+              {isTruncated && (
+                <div className="pt-4 text-center">
+                  <Button variant="outline" onClick={handleLoadMore} disabled={loadingMore}>
+                    {loadingMore ? "Loading..." : "Load more"}
+                  </Button>
+                </div>
+              )}
+            </>
+          )}
+        </>
       )}
     </div>
   );
@@ -463,7 +603,8 @@ function App() {
   return (
     <Routes>
       <Route path="/" element={<ProfileList />} />
-      <Route path="/p/:profileName" element={<SearchViewGuard />} />
+      <Route path="/p/:profileName" element={<Navigate to="browse/" replace />} />
+      <Route path="/p/:profileName/browse/*" element={<BrowseViewGuard />} />
     </Routes>
   );
 }

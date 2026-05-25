@@ -8,7 +8,7 @@ use axum::extract::{Path, Query, State};
 use axum::Json;
 use serde::{Deserialize, Serialize};
 use tantivy::collector::{Count, TopDocs};
-use tantivy::query::{BooleanQuery, Occur, Query as TantivyQuery, QueryParser, TermQuery};
+use tantivy::query::{BooleanQuery, Occur, Query as TantivyQuery, QueryParser, RegexQuery, TermQuery};
 use tantivy::schema::{Field, IndexRecordOption, Value};
 use tantivy::tokenizer::{TextAnalyzer, TokenStream};
 use tantivy::{TantivyDocument, Term};
@@ -32,6 +32,7 @@ pub struct SearchParams {
     pub page: Option<usize>,
     pub ext: Option<String>,
     pub mode: Option<SearchMode>,
+    pub prefix: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -147,7 +148,7 @@ pub async fn search(
         .parse_query(&query_str)
         .map_err(|e| AppError::bad_request(format!("invalid query: {e}")))?;
 
-    let query: Box<dyn TantivyQuery> = if extensions.is_empty() {
+    let mut query: Box<dyn TantivyQuery> = if extensions.is_empty() {
         parsed_query
     } else {
         let ext_queries: Vec<Box<dyn TantivyQuery>> = extensions
@@ -164,6 +165,16 @@ pub async fn search(
             (Occur::Must, Box::new(BooleanQuery::union(ext_queries))),
         ]))
     };
+
+    if let Some(pfx) = params.prefix.as_deref().filter(|p| !p.is_empty()) {
+        let escaped = regex_syntax::escape(pfx);
+        let prefix_query = RegexQuery::from_pattern(&format!("{escaped}.*"), schema.key_raw)
+            .map_err(|e| AppError::bad_request(format!("invalid prefix: {e}")))?;
+        query = Box::new(BooleanQuery::new(vec![
+            (Occur::Must, query),
+            (Occur::Must, Box::new(prefix_query)),
+        ]));
+    }
 
     let page = params.page.unwrap_or(1).max(1);
     let offset = (page - 1) * SEARCH_RESULT_LIMIT;
@@ -515,4 +526,106 @@ pub async fn presign(
         .context("presign failed")?;
 
     Ok(axum::response::Redirect::temporary(presigned.uri()))
+}
+
+#[derive(Deserialize)]
+pub struct BrowseParams {
+    pub prefix: Option<String>,
+    pub continuation_token: Option<String>,
+}
+
+#[derive(Serialize)]
+pub struct BrowseResponse {
+    pub prefix: String,
+    pub folders: Vec<BrowseFolder>,
+    pub files: Vec<BrowseFile>,
+    pub is_truncated: bool,
+    pub next_continuation_token: Option<String>,
+}
+
+#[derive(Serialize)]
+pub struct BrowseFolder {
+    pub key: String,
+    pub name: String,
+}
+
+#[derive(Serialize)]
+pub struct BrowseFile {
+    pub key: String,
+    pub name: String,
+    pub size: u64,
+    pub last_modified: String,
+}
+
+pub async fn browse(
+    State(state): State<AppState>,
+    Path(profile_name): Path<String>,
+    Query(params): Query<BrowseParams>,
+) -> Result<Json<BrowseResponse>, AppError> {
+    let profile = state
+        .get_profile(&profile_name)
+        .ok_or_else(|| AppError::not_found(format!("profile not found: {profile_name}")))?;
+
+    let prefix = params.prefix.unwrap_or_default();
+
+    let mut req = profile
+        .state
+        .s3_client
+        .list_objects_v2()
+        .bucket(&profile.state.bucket_name)
+        .delimiter("/")
+        .prefix(&prefix)
+        .max_keys(1000);
+
+    if let Some(token) = &params.continuation_token {
+        req = req.continuation_token(token);
+    }
+
+    let output = req.send().await.context("failed to list S3 objects")?;
+
+    let folders: Vec<BrowseFolder> = output
+        .common_prefixes()
+        .iter()
+        .filter_map(|cp| {
+            let key = cp.prefix()?.to_string();
+            let name = key.strip_prefix(&prefix).unwrap_or(&key).to_string();
+            Some(BrowseFolder { key, name })
+        })
+        .collect();
+
+    let files: Vec<BrowseFile> = output
+        .contents()
+        .iter()
+        .filter_map(|obj| {
+            let key = obj.key()?.to_string();
+            if key == prefix {
+                return None;
+            }
+            let name = key.strip_prefix(&prefix).unwrap_or(&key).to_string();
+            let size = obj.size().unwrap_or(0) as u64;
+            let last_modified = obj
+                .last_modified()
+                .map(|dt| {
+                    dt.fmt(aws_sdk_s3::primitives::DateTimeFormat::DateTime)
+                        .unwrap_or_default()
+                })
+                .unwrap_or_default();
+            Some(BrowseFile { key, name, size, last_modified })
+        })
+        .collect();
+
+    let is_truncated = output.is_truncated().unwrap_or(false);
+    let next_continuation_token = if is_truncated {
+        output.next_continuation_token().map(|s| s.to_string())
+    } else {
+        None
+    };
+
+    Ok(Json(BrowseResponse {
+        prefix,
+        folders,
+        files,
+        is_truncated,
+        next_continuation_token,
+    }))
 }
