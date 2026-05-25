@@ -12,6 +12,7 @@ pub struct SearchSchema {
     pub key: Field,
     pub key_raw: Field,
     pub content: Field,
+    pub extension: Field,
     pub size: Field,
     pub last_modified: Field,
 }
@@ -28,6 +29,7 @@ pub fn build_schema() -> SearchSchema {
     let key = builder.add_text_field("key", text_options.clone());
     let key_raw = builder.add_text_field("key_raw", STRING | STORED);
     let content = builder.add_text_field("content", text_options);
+    let extension = builder.add_text_field("extension", STRING | STORED);
     let size = builder.add_u64_field("size", STORED);
     let last_modified = builder.add_text_field("last_modified", STRING | STORED);
     SearchSchema {
@@ -35,6 +37,7 @@ pub fn build_schema() -> SearchSchema {
         key,
         key_raw,
         content,
+        extension,
         size,
         last_modified,
     }
