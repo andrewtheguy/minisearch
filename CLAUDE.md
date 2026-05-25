@@ -1,4 +1,6 @@
-- no backward compatibility
+- no backward compatibility since it is a personal project
 - no cargo fmt
+- run cargo clippy with `-- -D warnings` to treat warnings as errors and cargo test after rust code changes
+- run biome checks on frontend/ after JS/TS code changes
 - error handling: `anyhow` for application errors (main, indexer, search), `thiserror` for typed API errors (`AppError` in `src/error.rs`); internal errors return generic "internal server error" to clients, detailed chain logged to stderr
 - `S3_BUCKET_NAME` and `AWS_ENDPOINT_URL` are read once in `search::index_path()` and shared via `IndexPathResult`; do not duplicate env reads
