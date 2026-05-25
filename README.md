@@ -115,7 +115,7 @@ The resulting binary at `target/release/minisearch` serves the SPA with no exter
 
 ## Guides
 
-- [S3 Gateway Setup](docs/s3-gateway-setup.md) — use MiniSearch with a local filesystem via an S3 gateway like VersityGW
+- [S3 Gateway Setup](docs/s3-gateway-setup.md) — use MiniSearch with a local filesystem via an S3 gateway (VersityGW, rclone)
 
 ## Frontend Tooling
 

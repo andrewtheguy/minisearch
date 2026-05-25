@@ -2,15 +2,17 @@
 
 Index and search files on a local filesystem by fronting them with an S3-compatible gateway. MiniSearch only performs read-only S3 operations (ListObjectsV2, HeadObject, GetObject, presigned GET), so the gateway never needs write permissions.
 
-This guide uses [VersityGW](https://github.com/versity/versitygw) as the example, but any S3-compatible gateway works.
+This guide covers [VersityGW](https://github.com/versity/versitygw) and [rclone serve s3](https://rclone.org/commands/rclone_serve_s3/), but any S3-compatible gateway works.
 
 ## Prerequisites
 
 - MiniSearch binary ([install instructions](../README.md#install-pre-built-binary))
-- [VersityGW](https://github.com/versity/versitygw/releases)
+- [VersityGW](https://github.com/versity/versitygw/releases) or [rclone](https://rclone.org/install/)
 - A directory of files you want to index
 
-## 1. Start VersityGW
+## 1. Start an S3 gateway
+
+### Option A: VersityGW
 
 Point VersityGW at a local directory using the POSIX backend in read-only mode:
 
@@ -29,6 +31,24 @@ versitygw posix \
 - `--access` / `--secret` — arbitrary credential strings; use the same values in the MiniSearch config.
 
 With the POSIX backend, the S3 bucket name corresponds to a subdirectory under the root path. For example, if you point VersityGW at `/data` and your files are in `/data/documents`, the bucket name is `documents`.
+
+### Option B: rclone
+
+Serve a local directory as a read-only S3 endpoint with [rclone serve s3](https://rclone.org/commands/rclone_serve_s3/):
+
+```bash
+rclone serve s3 \
+  --addr :7070 \
+  --auth-key myaccesskey,mysecretkey \
+  --read-only \
+  /path/to/your/files
+```
+
+- `--read-only` — only allows read operations; all write requests are rejected.
+- `--auth-key` — comma-separated `access_key_id,secret_access_key` pair; use the same values in the MiniSearch config.
+- `--addr` — address and port to listen on (default `127.0.0.1:8080`).
+
+With rclone, the served directory is exposed as a single bucket. The bucket name in your MiniSearch config should match the directory name.
 
 ## 2. Set up a hostname for the gateway
 
@@ -76,9 +96,9 @@ Open http://localhost:3000 to search your files.
 ## Security notes
 
 - MiniSearch never writes to S3. Even if the gateway allows writes, MiniSearch will not modify your files.
-- VersityGW can be further locked down with IAM policies for read-only access, but this is not strictly necessary given MiniSearch's read-only behavior.
+- Both VersityGW (`--readonly`) and rclone (`--read-only`) enforce read-only access at the gateway level as an additional safeguard.
 - Presigned URLs point back to the gateway endpoint. For the browser to follow them, the gateway must be reachable from the client machine at the configured endpoint URL.
-- For production deployments, consider running VersityGW behind a reverse proxy with TLS.
+- For production deployments, consider running the gateway behind a reverse proxy with TLS.
 
 ## Troubleshooting
 
