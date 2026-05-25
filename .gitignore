@@ -2,4 +2,4 @@
 .env
 frontend/node_modules
 frontend/dist
-tantivy_index/
+tmp/
