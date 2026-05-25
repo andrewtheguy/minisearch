@@ -1,5 +1,13 @@
 import { type FormEvent, useCallback, useEffect, useRef, useState } from "react";
-import { Link, Navigate, Route, Routes, useNavigate, useParams } from "react-router";
+import {
+  Link,
+  Navigate,
+  Route,
+  Routes,
+  useNavigate,
+  useParams,
+  useSearchParams,
+} from "react-router";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
@@ -72,6 +80,25 @@ const EXT_PRESETS: Record<string, string> = {
   data: "csv,tsv,json,jsonl,ndjson,xml,sql",
   shell: "sh,bash,zsh,fish,ps1",
 };
+
+function extToSet(ext: string): Set<string> {
+  return new Set(
+    ext
+      .split(",")
+      .map((s) => s.trim().toLowerCase())
+      .filter(Boolean),
+  );
+}
+
+function matchPreset(ext: string): string {
+  if (!ext.trim()) return "";
+  const current = extToSet(ext);
+  for (const [key, value] of Object.entries(EXT_PRESETS)) {
+    const preset = extToSet(value);
+    if (current.size === preset.size && [...current].every((e) => preset.has(e))) return key;
+  }
+  return "custom";
+}
 
 function getPageNumbers(current: number, total: number): (number | "ellipsis")[] {
   if (total <= 7) {
@@ -146,6 +173,7 @@ function BrowseViewGuard() {
 
 function BrowseView({ profileName, prefix }: { profileName: string; prefix: string }) {
   const navigate = useNavigate();
+  const [searchParams, setSearchParams] = useSearchParams();
 
   const [folders, setFolders] = useState<BrowseFolder[]>([]);
   const [files, setFiles] = useState<BrowseFile[]>([]);
@@ -156,16 +184,23 @@ function BrowseView({ profileName, prefix }: { profileName: string; prefix: stri
   const [pageTokens, setPageTokens] = useState<Array<string | null>>([null]);
   const browseControllerRef = useRef<AbortController | null>(null);
 
-  const [query, setQuery] = useState("");
+  const [query, setQuery] = useState(() => searchParams.get("q") || "");
   const [searchResults, setSearchResults] = useState<SearchResult[] | null>(null);
   const [totalCount, setTotalCount] = useState<number | null>(null);
-  const [page, setPage] = useState(1);
+  const [page, setPage] = useState(() => {
+    const p = Number.parseInt(searchParams.get("page") || "1", 10);
+    return p >= 1 ? p : 1;
+  });
   const [totalPages, setTotalPages] = useState(0);
   const [searching, setSearching] = useState(false);
   const [searchError, setSearchError] = useState<string | null>(null);
-  const [mode, setMode] = useState<SearchMode>("both");
-  const [ext, setExt] = useState("");
-  const [extPreset, setExtPreset] = useState("");
+  const [mode, setMode] = useState<SearchMode>(() => {
+    const m = searchParams.get("mode");
+    if (m === "filename" || m === "content") return m;
+    return "both";
+  });
+  const [ext, setExt] = useState(() => searchParams.get("ext") || "");
+  const [extPreset, setExtPreset] = useState(() => matchPreset(searchParams.get("ext") || ""));
   const searchControllerRef = useRef<AbortController | null>(null);
 
   const fetchBrowsePage = useCallback(
@@ -264,18 +299,58 @@ function BrowseView({ profileName, prefix }: { profileName: string; prefix: stri
     [profileName, prefix],
   );
 
+  const doSearchRef = useRef(doSearch);
+  doSearchRef.current = doSearch;
+
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const q = params.get("q") || "";
+    if (q) {
+      const p = Number.parseInt(params.get("page") || "1", 10);
+      const m = params.get("mode");
+      const initialMode: SearchMode = m === "filename" || m === "content" ? m : "both";
+      const e = params.get("ext") || "";
+      doSearchRef.current(q, p >= 1 ? p : 1, initialMode, e);
+    }
+    return () => {
+      searchControllerRef.current?.abort();
+      searchControllerRef.current = null;
+    };
+  }, []);
+
+  function updateBrowseUrl(pageIdx: number) {
+    const params = new URLSearchParams();
+    if (pageIdx > 0) params.set("page", String(pageIdx + 1));
+    setSearchParams(params);
+  }
+
+  function handleBrowsePage(pageIdx: number) {
+    fetchBrowsePage(pageTokens[pageIdx] ?? null, pageIdx);
+    updateBrowseUrl(pageIdx);
+  }
+
+  function searchAndUpdateUrl(q: string, p: number, m: SearchMode, e: string) {
+    const params = new URLSearchParams();
+    if (q.trim()) params.set("q", q.trim());
+    if (p > 1) params.set("page", String(p));
+    if (m !== "both") params.set("mode", m);
+    if (e.trim()) params.set("ext", e.trim());
+    setSearchParams(params);
+    doSearch(q, p, m, e);
+  }
+
   function handleSearch(e: FormEvent) {
     e.preventDefault();
     const q = query.trim();
     if (!q) return;
     setPage(1);
-    doSearch(q, 1, mode, ext);
+    searchAndUpdateUrl(q, 1, mode, ext);
   }
 
   function handlePageChange(newPage: number) {
     setPage(newPage);
     window.scrollTo({ top: 0, behavior: "smooth" });
-    doSearch(query.trim(), newPage, mode, ext);
+    searchAndUpdateUrl(query.trim(), newPage, mode, ext);
   }
 
   function handleClearSearch() {
@@ -291,6 +366,10 @@ function BrowseView({ profileName, prefix }: { profileName: string; prefix: stri
     setMode("both");
     setExt("");
     setExtPreset("");
+    setSearchParams(new URLSearchParams());
+    setBrowsePageIndex(0);
+    setPageTokens([null]);
+    fetchBrowsePage(null, 0);
   }
 
   const segments = prefix ? prefix.replace(/\/$/, "").split("/") : [];
@@ -577,9 +656,7 @@ function BrowseView({ profileName, prefix }: { profileName: string; prefix: stri
                     variant="outline"
                     size="sm"
                     disabled={browsePageIndex === 0 || browseLoading}
-                    onClick={() =>
-                      fetchBrowsePage(pageTokens[browsePageIndex - 1] ?? null, browsePageIndex - 1)
-                    }
+                    onClick={() => handleBrowsePage(browsePageIndex - 1)}
                   >
                     Previous
                   </Button>
@@ -588,9 +665,7 @@ function BrowseView({ profileName, prefix }: { profileName: string; prefix: stri
                     variant="outline"
                     size="sm"
                     disabled={!isTruncated || browseLoading}
-                    onClick={() =>
-                      fetchBrowsePage(pageTokens[browsePageIndex + 1] ?? null, browsePageIndex + 1)
-                    }
+                    onClick={() => handleBrowsePage(browsePageIndex + 1)}
                   >
                     Next
                   </Button>
