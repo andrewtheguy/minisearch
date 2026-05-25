@@ -32,6 +32,12 @@
       }
     }
   },
+  "css": {
+    "parser": {
+      "cssModules": false,
+      "tailwindDirectives": true
+    }
+  },
   "json": {
     "formatter": {
       "trailingCommas": "none"

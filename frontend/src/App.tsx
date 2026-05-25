@@ -1,5 +1,8 @@
 import { type FormEvent, useCallback, useEffect, useRef, useState } from "react";
-import "./App.css";
+import { Alert, AlertDescription } from "@/components/ui/alert";
+import { Button } from "@/components/ui/button";
+import { Card, CardContent } from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
 
 interface SearchResult {
   key: string;
@@ -116,60 +119,73 @@ function App() {
   }
 
   return (
-    <div className="app">
-      <h1>FTS Everywhere</h1>
-      <form className="search-form" onSubmit={handleSearch}>
-        <input
-          className="search-input"
+    <div className="mx-auto max-w-4xl px-4 py-8">
+      <h1 className="text-3xl font-bold tracking-tight mb-6">FTS Everywhere</h1>
+
+      <form className="flex gap-2 mb-6" onSubmit={handleSearch}>
+        <Input
+          className="flex-1"
           type="text"
           placeholder="Search file contents..."
           value={query}
           onChange={(e) => setQuery(e.target.value)}
         />
-        <button type="submit" disabled={searching}>
+        <Button type="submit" disabled={searching}>
           Search
-        </button>
+        </Button>
         {results !== null && (
-          <button type="button" onClick={handleClear}>
+          <Button type="button" variant="outline" onClick={handleClear}>
             Clear
-          </button>
+          </Button>
         )}
       </form>
 
-      {searching && <p>Searching...</p>}
-      {error && <p className="error">Error: {error}</p>}
+      {searching && <p className="text-muted-foreground">Searching...</p>}
+
+      {error && (
+        <Alert variant="destructive" className="mb-4">
+          <AlertDescription>Error: {error}</AlertDescription>
+        </Alert>
+      )}
 
       {results !== null && !searching && !error && (
-        <div className="search-results">
-          <p className="result-count">
+        <div className="space-y-3">
+          <p className="text-sm text-muted-foreground">
             {totalCount !== null && resultLimit !== null && totalCount > resultLimit
               ? `Showing first ${results.length} of ${totalCount} results`
               : `${results.length} result${results.length !== 1 ? "s" : ""} found`}
           </p>
           {results.map((result) => (
-            <div key={result.key} className="search-result">
-              <a
-                className="result-key"
-                href={`/api/presign?key=${encodeURIComponent(result.key)}`}
-                target="_blank"
-                rel="noopener noreferrer"
-              >
-                {result.key}
-              </a>
-              <div className="result-meta">
-                {formatBytes(result.size)} &middot;{" "}
-                {new Date(result.last_modified).toLocaleString()}
-              </div>
-              <div className="result-snippet">
-                {result.snippet.map((segment) =>
-                  segment.highlighted ? (
-                    <b key={`${segment.start}-${segment.end}-highlight`}>{segment.text}</b>
-                  ) : (
-                    <span key={`${segment.start}-${segment.end}-text`}>{segment.text}</span>
-                  ),
-                )}
-              </div>
-            </div>
+            <Card key={result.key}>
+              <CardContent>
+                <a
+                  className="text-primary font-semibold hover:underline block mb-1"
+                  href={`/api/presign?key=${encodeURIComponent(result.key)}`}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                >
+                  {result.key}
+                </a>
+                <p className="text-sm text-muted-foreground mb-2">
+                  {formatBytes(result.size)} &middot;{" "}
+                  {new Date(result.last_modified).toLocaleString()}
+                </p>
+                <div className="text-sm leading-relaxed font-mono">
+                  {result.snippet.map((segment) =>
+                    segment.highlighted ? (
+                      <mark
+                        key={`${segment.start}-${segment.end}-highlight`}
+                        className="bg-yellow-100 dark:bg-yellow-900/50 px-0.5 rounded-sm"
+                      >
+                        {segment.text}
+                      </mark>
+                    ) : (
+                      <span key={`${segment.start}-${segment.end}-text`}>{segment.text}</span>
+                    ),
+                  )}
+                </div>
+              </CardContent>
+            </Card>
           ))}
         </div>
       )}
