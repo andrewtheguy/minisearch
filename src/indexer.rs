@@ -244,27 +244,7 @@ pub async fn run_indexer(profile: &crate::config::ProfileConfig) -> anyhow::Resu
     }
 
     if let Some(searcher) = &lookup_searcher {
-        for segment_reader in searcher.segment_readers() {
-            let Ok(store_reader) = segment_reader.get_store_reader(0) else {
-                continue;
-            };
-            for doc_id in 0..segment_reader.max_doc() {
-                if segment_reader.is_deleted(doc_id) {
-                    continue;
-                }
-                let Ok(doc) = store_reader.get::<TantivyDocument>(doc_id) else {
-                    continue;
-                };
-                let key = doc
-                    .get_first(search_schema.key_raw)
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("");
-                if !key.is_empty() && !seen_keys.contains(key) && !failed_keys.contains(key) {
-                    writer.delete_term(Term::from_field_text(search_schema.key_raw, key));
-                    removed += 1;
-                }
-            }
-        }
+        removed = remove_deleted_keys(searcher, &search_schema, &seen_keys, &failed_keys, &mut writer);
     }
 
     writer.commit()?;
@@ -276,4 +256,165 @@ pub async fn run_indexer(profile: &crate::config::ProfileConfig) -> anyhow::Resu
     info!("  removed:              {removed}");
     info!("  failed:               {failed}");
     Ok(())
+}
+
+fn remove_deleted_keys(
+    searcher: &Searcher,
+    schema: &search::SearchSchema,
+    seen_keys: &HashSet<String>,
+    failed_keys: &HashSet<String>,
+    writer: &mut tantivy::IndexWriter,
+) -> usize {
+    let mut removed = 0;
+    for segment_reader in searcher.segment_readers() {
+        let Ok(store_reader) = segment_reader.get_store_reader(0) else {
+            continue;
+        };
+        for doc_id in 0..segment_reader.max_doc() {
+            if segment_reader.is_deleted(doc_id) {
+                continue;
+            }
+            let Ok(doc) = store_reader.get::<TantivyDocument>(doc_id) else {
+                continue;
+            };
+            let key = doc
+                .get_first(schema.key_raw)
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+            if !key.is_empty() && !seen_keys.contains(key) && !failed_keys.contains(key) {
+                writer.delete_term(Term::from_field_text(schema.key_raw, key));
+                removed += 1;
+            }
+        }
+    }
+    removed
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn setup_index(keys: &[&str]) -> (tempfile::TempDir, tantivy::Index, search::SearchSchema) {
+        let dir = tempfile::tempdir().unwrap();
+        let index_path = dir.path().join("index");
+        let schema = search::build_schema();
+        let index = search::open_or_create_index(&index_path, &schema.schema).unwrap();
+        let mut writer = index.writer(15_000_000).unwrap();
+        for key in keys {
+            writer
+                .add_document(doc!(
+                    schema.key => *key,
+                    schema.key_raw => *key,
+                    schema.size => 0u64,
+                    schema.last_modified => "2025-01-01T00:00:00Z",
+                ))
+                .unwrap();
+        }
+        writer.commit().unwrap();
+        (dir, index, schema)
+    }
+
+    fn indexed_keys(index: &tantivy::Index, schema: &search::SearchSchema) -> HashSet<String> {
+        let reader = index.reader().unwrap();
+        let searcher = reader.searcher();
+        let mut keys = HashSet::new();
+        for segment_reader in searcher.segment_readers() {
+            let store_reader = segment_reader.get_store_reader(0).unwrap();
+            for doc_id in 0..segment_reader.max_doc() {
+                if segment_reader.is_deleted(doc_id) {
+                    continue;
+                }
+                let doc = store_reader.get::<TantivyDocument>(doc_id).unwrap();
+                if let Some(k) = doc.get_first(schema.key_raw).and_then(|v| v.as_str()) {
+                    keys.insert(k.to_string());
+                }
+            }
+        }
+        keys
+    }
+
+    #[test]
+    fn removes_keys_not_seen_in_bucket() {
+        let (_dir, index, schema) = setup_index(&["a.txt", "b.txt", "c.txt"]);
+        let reader = index.reader().unwrap();
+        let searcher = reader.searcher();
+
+        let seen = HashSet::from(["a.txt".to_string()]);
+        let failed = HashSet::new();
+        let mut writer = index.writer(15_000_000).unwrap();
+        let removed = remove_deleted_keys(&searcher, &schema, &seen, &failed, &mut writer);
+        writer.commit().unwrap();
+        drop(searcher);
+        drop(reader);
+
+        assert_eq!(removed, 2);
+        let remaining = indexed_keys(&index, &schema);
+        assert_eq!(remaining, HashSet::from(["a.txt".to_string()]));
+    }
+
+    #[test]
+    fn preserves_failed_keys() {
+        let (_dir, index, schema) = setup_index(&["a.txt", "b.txt", "c.txt"]);
+        let reader = index.reader().unwrap();
+        let searcher = reader.searcher();
+
+        let seen = HashSet::from(["a.txt".to_string()]);
+        let failed = HashSet::from(["b.txt".to_string()]);
+        let mut writer = index.writer(15_000_000).unwrap();
+        let removed = remove_deleted_keys(&searcher, &schema, &seen, &failed, &mut writer);
+        writer.commit().unwrap();
+        drop(searcher);
+        drop(reader);
+
+        assert_eq!(removed, 1);
+        let remaining = indexed_keys(&index, &schema);
+        assert_eq!(
+            remaining,
+            HashSet::from(["a.txt".to_string(), "b.txt".to_string()])
+        );
+    }
+
+    #[test]
+    fn no_removal_when_all_seen() {
+        let (_dir, index, schema) = setup_index(&["a.txt", "b.txt"]);
+        let reader = index.reader().unwrap();
+        let searcher = reader.searcher();
+
+        let seen = HashSet::from(["a.txt".to_string(), "b.txt".to_string()]);
+        let failed = HashSet::new();
+        let mut writer = index.writer(15_000_000).unwrap();
+        let removed = remove_deleted_keys(&searcher, &schema, &seen, &failed, &mut writer);
+        writer.commit().unwrap();
+        drop(searcher);
+        drop(reader);
+
+        assert_eq!(removed, 0);
+        let remaining = indexed_keys(&index, &schema);
+        assert_eq!(
+            remaining,
+            HashSet::from(["a.txt".to_string(), "b.txt".to_string()])
+        );
+    }
+
+    #[test]
+    fn all_failed_none_removed() {
+        let (_dir, index, schema) = setup_index(&["a.txt", "b.txt"]);
+        let reader = index.reader().unwrap();
+        let searcher = reader.searcher();
+
+        let seen = HashSet::new();
+        let failed = HashSet::from(["a.txt".to_string(), "b.txt".to_string()]);
+        let mut writer = index.writer(15_000_000).unwrap();
+        let removed = remove_deleted_keys(&searcher, &schema, &seen, &failed, &mut writer);
+        writer.commit().unwrap();
+        drop(searcher);
+        drop(reader);
+
+        assert_eq!(removed, 0);
+        let remaining = indexed_keys(&index, &schema);
+        assert_eq!(
+            remaining,
+            HashSet::from(["a.txt".to_string(), "b.txt".to_string()])
+        );
+    }
 }
