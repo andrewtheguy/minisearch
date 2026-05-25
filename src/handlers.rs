@@ -168,7 +168,7 @@ pub async fn search(
 
     if let Some(pfx) = params.prefix.as_deref().filter(|p| !p.is_empty()) {
         let escaped = regex_syntax::escape(pfx);
-        let prefix_query = RegexQuery::from_pattern(&format!("{escaped}.*"), schema.key_raw)
+        let prefix_query = RegexQuery::from_pattern(&format!("^{escaped}.*"), schema.key_raw)
             .map_err(|e| AppError::bad_request(format!("invalid prefix: {e}")))?;
         query = Box::new(BooleanQuery::new(vec![
             (Occur::Must, query),
