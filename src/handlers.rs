@@ -154,7 +154,11 @@ fn render_snippet_html(
         .filter_map(|range| {
             let start = range.start.max(fragment.start);
             let end = range.end.min(fragment.end);
-            (start < end).then_some(start - fragment.start..end - fragment.start)
+            if start < end {
+                Some(start - fragment.start..end - fragment.start)
+            } else {
+                None
+            }
         })
         .collect::<Vec<_>>();
 
@@ -307,6 +311,18 @@ mod tests {
         );
 
         assert_eq!(html, "甜品<b>朱古力</b>蛋糕 &amp; &lt;menu&gt;");
+    }
+
+    #[test]
+    fn render_snippet_html_ignores_highlights_outside_selected_fragment() {
+        let terms = BTreeSet::from(["alpha".to_string(), "omega".to_string()]);
+        let html = render_snippet_html(
+            &format!("alpha {} omega omega", "middle ".repeat(200)),
+            TextAnalyzer::from(tantivy::tokenizer::SimpleTokenizer::default()),
+            &terms,
+        );
+
+        assert!(html.contains("<b>omega</b> <b>omega</b>"));
     }
 }
 
