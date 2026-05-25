@@ -1,4 +1,4 @@
-import { type FormEvent, useEffect, useState } from "react";
+import { type FormEvent, useCallback, useEffect, useRef, useState } from "react";
 import "./App.css";
 
 interface SearchResult {
@@ -33,32 +33,49 @@ function App() {
   const [results, setResults] = useState<SearchResult[] | null>(null);
   const [searching, setSearching] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const currentSearchController = useRef<AbortController | null>(null);
 
-  function doSearch(q: string) {
+  const doSearch = useCallback((q: string) => {
+    currentSearchController.current?.abort();
+    const controller = new AbortController();
+    currentSearchController.current = controller;
+
     setSearching(true);
     setError(null);
 
-    fetch(`/api/search?q=${encodeURIComponent(q)}`)
+    fetch(`/api/search?q=${encodeURIComponent(q)}`, { signal: controller.signal })
       .then((res) => {
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         return res.json() as Promise<SearchResponse>;
       })
       .then((data) => {
+        if (currentSearchController.current !== controller) return;
         setResults(data.results);
-        setSearching(false);
       })
       .catch((err) => {
-        setError(err.message);
-        setSearching(false);
+        if (err instanceof DOMException && err.name === "AbortError") return;
+        if (currentSearchController.current === controller) {
+          setError(err instanceof Error ? err.message : String(err));
+        }
+      })
+      .finally(() => {
+        if (currentSearchController.current === controller) {
+          currentSearchController.current = null;
+          setSearching(false);
+        }
       });
-  }
+  }, []);
 
   useEffect(() => {
     const initial = getInitialQuery();
     if (initial) {
       doSearch(initial);
     }
-  }, []);
+    return () => {
+      currentSearchController.current?.abort();
+      currentSearchController.current = null;
+    };
+  }, [doSearch]);
 
   function handleSearch(e: FormEvent) {
     e.preventDefault();
@@ -73,8 +90,11 @@ function App() {
   }
 
   function handleClear() {
+    currentSearchController.current?.abort();
+    currentSearchController.current = null;
     setQuery("");
     setResults(null);
+    setSearching(false);
     setError(null);
     const url = new URL(window.location.href);
     url.searchParams.delete("q");
@@ -126,6 +146,7 @@ function App() {
               </div>
               <div
                 className="result-snippet"
+                // biome-ignore lint/security/noDangerouslySetInnerHtml: snippet_html is backend-generated with escaped text and only <b> highlights.
                 dangerouslySetInnerHTML={{ __html: result.snippet_html }}
               />
             </div>

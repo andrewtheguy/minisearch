@@ -208,7 +208,7 @@ pub async fn run_indexer() {
                 }
             };
 
-            let text = match String::from_utf8(body.to_vec()) {
+            let text = match String::from_utf8(body.into()) {
                 Ok(t) => t,
                 Err(_) => {
                     skipped_non_utf8 += 1;
@@ -247,7 +247,7 @@ pub async fn run_indexer() {
     }
 
     writer.commit().unwrap();
-    let total = indexed + unchanged + skipped_non_text + skipped_non_utf8 + failed + removed;
+    let total = indexed + unchanged + skipped_non_text + skipped_non_utf8 + failed;
     println!("\ndone: {total} files total");
     println!("  indexed:          {indexed}");
     println!("  unchanged:        {unchanged}");

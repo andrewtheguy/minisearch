@@ -52,7 +52,7 @@ pub fn open_or_create_index(path: &Path, schema: &Schema) -> tantivy::Result<Ind
     let index = if path.exists() {
         Index::open_in_dir(path)?
     } else {
-        std::fs::create_dir_all(path).expect("failed to create index directory");
+        std::fs::create_dir_all(path)?;
         Index::create_in_dir(path, schema.clone())?
     };
     register_tokenizers(&index);
