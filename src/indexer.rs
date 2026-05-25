@@ -63,6 +63,14 @@ fn is_text_by_name(key: &str) -> bool {
     false
 }
 
+fn extract_extension(key: &str) -> String {
+    Path::new(key)
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(|e| e.to_ascii_lowercase())
+        .unwrap_or_default()
+}
+
 fn is_text_content_type(content_type: &str) -> bool {
     content_type.starts_with("text/") || TEXT_APP_TYPES.contains(&content_type)
 }
@@ -136,6 +144,8 @@ pub async fn run_indexer(config: &crate::config::AppConfig) -> anyhow::Result<()
                 continue;
             }
 
+            let ext = extract_extension(&key);
+
             let is_text = if is_text_by_name(&key) {
                 true
             } else {
@@ -159,6 +169,7 @@ pub async fn run_indexer(config: &crate::config::AppConfig) -> anyhow::Result<()
                 writer.add_document(doc!(
                     search_schema.key => key.as_str(),
                     search_schema.key_raw => key.as_str(),
+                    search_schema.extension => ext.as_str(),
                     search_schema.size => size,
                     search_schema.last_modified => last_modified.as_str(),
                 ))?;
@@ -196,6 +207,7 @@ pub async fn run_indexer(config: &crate::config::AppConfig) -> anyhow::Result<()
                         search_schema.key => key.as_str(),
                         search_schema.key_raw => key.as_str(),
                         search_schema.content => text.as_str(),
+                        search_schema.extension => ext.as_str(),
                         search_schema.size => size,
                         search_schema.last_modified => last_modified.as_str(),
                     ))?;
@@ -205,6 +217,7 @@ pub async fn run_indexer(config: &crate::config::AppConfig) -> anyhow::Result<()
                     writer.add_document(doc!(
                         search_schema.key => key.as_str(),
                         search_schema.key_raw => key.as_str(),
+                        search_schema.extension => ext.as_str(),
                         search_schema.size => size,
                         search_schema.last_modified => last_modified.as_str(),
                     ))?;

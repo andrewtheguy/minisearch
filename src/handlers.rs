@@ -7,19 +7,30 @@ use aws_sdk_s3::presigning::PresigningConfig;
 use axum::{extract::Query, extract::State, Json};
 use serde::{Deserialize, Serialize};
 use tantivy::collector::{Count, TopDocs};
-use tantivy::query::{Query as TantivyQuery, QueryParser};
-use tantivy::schema::{Field, Value};
+use tantivy::query::{BooleanQuery, Occur, Query as TantivyQuery, QueryParser, TermQuery};
+use tantivy::schema::{Field, IndexRecordOption, Value};
 use tantivy::tokenizer::{TextAnalyzer, TokenStream};
-use tantivy::TantivyDocument;
+use tantivy::{TantivyDocument, Term};
 
 use crate::error::AppError;
 use crate::search;
 use crate::state::{AppState, SearchState};
 
+#[derive(Deserialize, Default, Clone, Copy)]
+#[serde(rename_all = "lowercase")]
+pub enum SearchMode {
+    #[default]
+    Both,
+    Filename,
+    Content,
+}
+
 #[derive(Deserialize)]
 pub struct SearchParams {
     pub q: Option<String>,
     pub page: Option<usize>,
+    pub ext: Option<String>,
+    pub mode: Option<SearchMode>,
 }
 
 #[derive(Serialize)]
@@ -85,11 +96,47 @@ pub async fn search(
     let schema = &search_state.schema;
     let reader = &search_state.reader;
 
+    let mode = params.mode.unwrap_or_default();
+    let extensions: Vec<String> = params
+        .ext
+        .as_deref()
+        .filter(|e| !e.trim().is_empty())
+        .map(|e| {
+            e.split(',')
+                .map(|s| s.trim().to_ascii_lowercase())
+                .filter(|s| !s.is_empty())
+                .collect()
+        })
+        .unwrap_or_default();
+
     let searcher = reader.searcher();
-    let query_parser = QueryParser::for_index(searcher.index(), vec![schema.key, schema.content]);
-    let query = query_parser
+    let search_fields = match mode {
+        SearchMode::Both => vec![schema.key, schema.content],
+        SearchMode::Filename => vec![schema.key],
+        SearchMode::Content => vec![schema.content],
+    };
+    let query_parser = QueryParser::for_index(searcher.index(), search_fields);
+    let parsed_query = query_parser
         .parse_query(&query_str)
         .map_err(|e| AppError::bad_request(format!("invalid query: {e}")))?;
+
+    let query: Box<dyn TantivyQuery> = if extensions.is_empty() {
+        parsed_query
+    } else {
+        let ext_queries: Vec<Box<dyn TantivyQuery>> = extensions
+            .iter()
+            .map(|ext| {
+                Box::new(TermQuery::new(
+                    Term::from_field_text(schema.extension, ext),
+                    IndexRecordOption::Basic,
+                )) as Box<dyn TantivyQuery>
+            })
+            .collect();
+        Box::new(BooleanQuery::new(vec![
+            (Occur::Must, parsed_query),
+            (Occur::Must, Box::new(BooleanQuery::union(ext_queries))),
+        ]))
+    };
 
     let page = params.page.unwrap_or(1).max(1);
     let offset = (page - 1) * SEARCH_RESULT_LIMIT;

@@ -28,6 +28,8 @@ interface SearchResponse {
   results: SearchResult[];
 }
 
+type SearchMode = "both" | "filename" | "content";
+
 function formatBytes(bytes: number): string {
   if (bytes === 0) return "0 B";
   const k = 1024;
@@ -45,6 +47,18 @@ function getInitialPage(): number {
   const params = new URLSearchParams(window.location.search);
   const p = Number.parseInt(params.get("page") || "1", 10);
   return p >= 1 ? p : 1;
+}
+
+function getInitialMode(): SearchMode {
+  const params = new URLSearchParams(window.location.search);
+  const m = params.get("mode");
+  if (m === "filename" || m === "content") return m;
+  return "both";
+}
+
+function getInitialExt(): string {
+  const params = new URLSearchParams(window.location.search);
+  return params.get("ext") || "";
 }
 
 function getPageNumbers(current: number, total: number): (number | "ellipsis")[] {
@@ -69,9 +83,11 @@ function App() {
   const [totalPages, setTotalPages] = useState(0);
   const [searching, setSearching] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [mode, setMode] = useState<SearchMode>(getInitialMode);
+  const [ext, setExt] = useState(getInitialExt);
   const currentSearchController = useRef<AbortController | null>(null);
 
-  const doSearch = useCallback((q: string, p: number) => {
+  const doSearch = useCallback((q: string, p: number, m: SearchMode, e: string) => {
     currentSearchController.current?.abort();
     const controller = new AbortController();
     currentSearchController.current = controller;
@@ -81,6 +97,8 @@ function App() {
 
     const params = new URLSearchParams({ q });
     if (p > 1) params.set("page", String(p));
+    if (m !== "both") params.set("mode", m);
+    if (e.trim()) params.set("ext", e.trim());
 
     fetch(`/api/search?${params}`, { signal: controller.signal })
       .then((res) => {
@@ -112,20 +130,23 @@ function App() {
     const initialQuery = getInitialQuery();
     const initialPage = getInitialPage();
     if (initialQuery) {
-      doSearch(initialQuery, initialPage);
+      doSearch(initialQuery, initialPage, getInitialMode(), getInitialExt());
     }
 
     function handlePopstate() {
       const q = getInitialQuery();
       const p = getInitialPage();
+      const m = getInitialMode();
+      const e = getInitialExt();
       setQuery(q);
       setPage(p);
+      setMode(m);
+      setExt(e);
       if (q) {
-        doSearch(q, p);
+        doSearch(q, p, m, e);
       } else {
         setResults(null);
         setTotalCount(null);
-
         setTotalPages(0);
       }
     }
@@ -147,9 +168,19 @@ function App() {
     const url = new URL(window.location.href);
     url.searchParams.set("q", q);
     url.searchParams.delete("page");
+    if (mode !== "both") {
+      url.searchParams.set("mode", mode);
+    } else {
+      url.searchParams.delete("mode");
+    }
+    if (ext.trim()) {
+      url.searchParams.set("ext", ext.trim());
+    } else {
+      url.searchParams.delete("ext");
+    }
     window.history.pushState(null, "", url.toString());
 
-    doSearch(q, 1);
+    doSearch(q, 1, mode, ext);
   }
 
   function handlePageChange(newPage: number) {
@@ -162,9 +193,19 @@ function App() {
     } else {
       url.searchParams.delete("page");
     }
+    if (mode !== "both") {
+      url.searchParams.set("mode", mode);
+    } else {
+      url.searchParams.delete("mode");
+    }
+    if (ext.trim()) {
+      url.searchParams.set("ext", ext.trim());
+    } else {
+      url.searchParams.delete("ext");
+    }
     window.history.pushState(null, "", url.toString());
 
-    doSearch(query.trim(), newPage);
+    doSearch(query.trim(), newPage, mode, ext);
   }
 
   function handleClear() {
@@ -177,10 +218,9 @@ function App() {
     setTotalPages(0);
     setSearching(false);
     setError(null);
-    const url = new URL(window.location.href);
-    url.searchParams.delete("q");
-    url.searchParams.delete("page");
-    window.history.pushState(null, "", url.pathname);
+    setMode("both");
+    setExt("");
+    window.history.pushState(null, "", window.location.pathname);
   }
 
   return (
@@ -204,6 +244,40 @@ function App() {
           </Button>
         )}
       </form>
+
+      <div className="flex flex-wrap gap-4 mb-6 items-center">
+        <div className="flex items-center gap-2">
+          <label htmlFor="ext-filter" className="text-sm text-muted-foreground whitespace-nowrap">
+            Extensions:
+          </label>
+          <Input
+            id="ext-filter"
+            className="w-48"
+            type="text"
+            placeholder="e.g. rs,py,js"
+            value={ext}
+            onChange={(e) => setExt(e.target.value)}
+          />
+        </div>
+        <fieldset className="flex items-center gap-2 border-none p-0 m-0">
+          <legend className="text-sm text-muted-foreground whitespace-nowrap float-left mr-2 p-0">
+            Search in:
+          </legend>
+          <div className="flex gap-1">
+            {(["both", "filename", "content"] as const).map((m) => (
+              <Button
+                key={m}
+                type="button"
+                variant={mode === m ? "default" : "outline"}
+                size="sm"
+                onClick={() => setMode(m)}
+              >
+                {m === "both" ? "All" : m === "filename" ? "Filename" : "Content"}
+              </Button>
+            ))}
+          </div>
+        </fieldset>
+      </div>
 
       {searching && <p className="text-muted-foreground">Searching...</p>}
 
