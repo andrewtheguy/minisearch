@@ -1,6 +1,8 @@
+use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
-use tantivy::doc;
+use tantivy::schema::Value;
+use tantivy::{doc, Term, TantivyDocument};
 
 use crate::search;
 
@@ -61,6 +63,46 @@ fn is_text_content_type(content_type: &str) -> bool {
     content_type.starts_with("text/") || TEXT_APP_TYPES.iter().any(|&t| content_type == t)
 }
 
+fn load_existing_index(index: &tantivy::Index, schema: &search::SearchSchema) -> HashMap<String, String> {
+    let reader = match index.reader() {
+        Ok(r) => r,
+        Err(_) => return HashMap::new(),
+    };
+    let searcher = reader.searcher();
+    let mut existing = HashMap::new();
+
+    for segment_reader in searcher.segment_readers() {
+        let store_reader = match segment_reader.get_store_reader(0) {
+            Ok(r) => r,
+            Err(_) => continue,
+        };
+        for doc_id in 0..segment_reader.max_doc() {
+            if segment_reader.is_deleted(doc_id) {
+                continue;
+            }
+            let doc: TantivyDocument = match store_reader.get(doc_id) {
+                Ok(d) => d,
+                Err(_) => continue,
+            };
+            let key = doc
+                .get_first(schema.key)
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
+            let last_modified = doc
+                .get_first(schema.last_modified)
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
+            if !key.is_empty() {
+                existing.insert(key, last_modified);
+            }
+        }
+    }
+
+    existing
+}
+
 pub async fn run_indexer() {
     let bucket_name = std::env::var("S3_BUCKET_NAME").expect("S3_BUCKET_NAME must be set");
     let aws_config = aws_config::load_from_env().await;
@@ -71,15 +113,18 @@ pub async fn run_indexer() {
     let index = search::open_or_create_index(&index_path, &search_schema.schema)
         .expect("failed to open/create index");
 
+    let existing = load_existing_index(&index, &search_schema);
+    println!("existing index: {} documents", existing.len());
+
     let mut writer = index.writer(50_000_000).expect("failed to create index writer");
 
-    writer.delete_all_documents().unwrap();
-    writer.commit().unwrap();
-
     let mut indexed = 0usize;
+    let mut unchanged = 0usize;
+    let mut removed = 0usize;
     let mut skipped_non_text = 0usize;
     let mut skipped_non_utf8 = 0usize;
     let mut failed = 0usize;
+    let mut seen_keys = HashSet::new();
     let mut continuation_token: Option<String> = None;
 
     loop {
@@ -103,6 +148,15 @@ pub async fn run_indexer() {
                         .unwrap_or_default()
                 })
                 .unwrap_or_default();
+
+            seen_keys.insert(key.clone());
+
+            if let Some(indexed_modified) = existing.get(&key) {
+                if *indexed_modified == last_modified {
+                    unchanged += 1;
+                    continue;
+                }
+            }
 
             if !is_text_by_name(&key) {
                 match s3_client
@@ -129,6 +183,8 @@ pub async fn run_indexer() {
             }
 
             println!("indexing: {key}");
+
+            writer.delete_term(Term::from_field_text(search_schema.key, &key));
 
             let body = match s3_client
                 .get_object()
@@ -183,10 +239,19 @@ pub async fn run_indexer() {
         }
     }
 
+    for key in existing.keys() {
+        if !seen_keys.contains(key) {
+            writer.delete_term(Term::from_field_text(search_schema.key, key));
+            removed += 1;
+        }
+    }
+
     writer.commit().unwrap();
-    let total = indexed + skipped_non_text + skipped_non_utf8 + failed;
+    let total = indexed + unchanged + skipped_non_text + skipped_non_utf8 + failed + removed;
     println!("\ndone: {total} files total");
     println!("  indexed:          {indexed}");
+    println!("  unchanged:        {unchanged}");
+    println!("  removed:          {removed}");
     println!("  skipped non-text: {skipped_non_text}");
     println!("  skipped non-utf8: {skipped_non_utf8}");
     println!("  failed:           {failed}");
