@@ -56,6 +56,34 @@ function getInitialMode(): SearchMode {
   return "both";
 }
 
+const EXT_PRESETS: Record<string, string> = {
+  code: "rs,py,go,java,kt,swift,c,h,cpp,hpp,cc,rb",
+  web: "html,htm,css,scss,less,js,jsx,ts,tsx,vue,svelte",
+  config: "json,yaml,yml,toml,ini,conf,cfg,env",
+  docs: "md,txt,rst,markdown",
+  data: "csv,tsv,json,jsonl,ndjson,xml,sql",
+  shell: "sh,bash,zsh,fish,ps1",
+};
+
+function extToSet(ext: string): Set<string> {
+  return new Set(
+    ext
+      .split(",")
+      .map((s) => s.trim().toLowerCase())
+      .filter(Boolean),
+  );
+}
+
+function matchPreset(ext: string): string {
+  if (!ext.trim()) return "";
+  const current = extToSet(ext);
+  for (const [key, value] of Object.entries(EXT_PRESETS)) {
+    const preset = extToSet(value);
+    if (current.size === preset.size && [...current].every((e) => preset.has(e))) return key;
+  }
+  return "custom";
+}
+
 function getInitialExt(): string {
   const params = new URLSearchParams(window.location.search);
   return params.get("ext") || "";
@@ -85,6 +113,7 @@ function App() {
   const [error, setError] = useState<string | null>(null);
   const [mode, setMode] = useState<SearchMode>(getInitialMode);
   const [ext, setExt] = useState(getInitialExt);
+  const [extPreset, setExtPreset] = useState(() => matchPreset(getInitialExt()));
   const currentSearchController = useRef<AbortController | null>(null);
 
   const doSearch = useCallback((q: string, p: number, m: SearchMode, e: string) => {
@@ -142,6 +171,7 @@ function App() {
       setPage(p);
       setMode(m);
       setExt(e);
+      setExtPreset(matchPreset(e));
       if (q) {
         doSearch(q, p, m, e);
       } else {
@@ -220,6 +250,7 @@ function App() {
     setError(null);
     setMode("both");
     setExt("");
+    setExtPreset("");
     window.history.pushState(null, "", window.location.pathname);
   }
 
@@ -247,17 +278,41 @@ function App() {
 
       <div className="flex flex-wrap gap-4 mb-6 items-center">
         <div className="flex items-center gap-2">
-          <label htmlFor="ext-filter" className="text-sm text-muted-foreground whitespace-nowrap">
+          <label htmlFor="ext-preset" className="text-sm text-muted-foreground whitespace-nowrap">
             Extensions:
           </label>
-          <Input
-            id="ext-filter"
-            className="w-48"
-            type="text"
-            placeholder="e.g. rs,py,js"
-            value={ext}
-            onChange={(e) => setExt(e.target.value)}
-          />
+          <select
+            id="ext-preset"
+            className="h-9 rounded-md border border-input bg-background px-3 text-sm"
+            value={extPreset}
+            onChange={(e) => {
+              const preset = e.target.value;
+              setExtPreset(preset);
+              if (preset === "custom") {
+                setExt("");
+              } else {
+                setExt(EXT_PRESETS[preset] || "");
+              }
+            }}
+          >
+            <option value="">All types</option>
+            <option value="code">Code (rs,py,go,java,...)</option>
+            <option value="web">Web (html,css,js,ts,...)</option>
+            <option value="config">Config (json,yaml,toml,...)</option>
+            <option value="docs">Docs (md,txt,rst)</option>
+            <option value="data">Data (csv,json,xml,sql,...)</option>
+            <option value="shell">Shell (sh,bash,zsh,...)</option>
+            <option value="custom">Custom...</option>
+          </select>
+          {extPreset === "custom" && (
+            <Input
+              className="w-48"
+              type="text"
+              placeholder="e.g. rs,py,js"
+              value={ext}
+              onChange={(e) => setExt(e.target.value)}
+            />
+          )}
         </div>
         <fieldset className="flex items-center gap-2 border-none p-0 m-0">
           <legend className="text-sm text-muted-foreground whitespace-nowrap float-left mr-2 p-0">
