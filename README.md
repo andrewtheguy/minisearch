@@ -86,8 +86,8 @@ The resulting binary at `target/release/fts-everywhere` serves the SPA with no e
 
 | Endpoint             | Method | Success Response                                                                                          | Errors                                                                 |
 |----------------------|--------|-----------------------------------------------------------------------------------------------------------|------------------------------------------------------------------------|
-| `/api/search?q=`     | GET    | JSON search results with structured snippet text segments, byte offsets, and highlight flags               | `400` for missing/invalid query; `503` when no index exists; `500` for search/retrieval failures |
-| `/api/presign?key=`  | GET    | Temporary redirect to a time-limited S3 presigned URL via layer 5 `handlers::presign`; layer 6 frontend result links use it in `frontend/src/App.tsx` | `400` for missing key; `500` for presign config or S3 presign failures |
+| `/api/search?q=`     | GET    | JSON search results with structured snippet text segments, byte offsets, and highlight flags               | `400` for missing/invalid query; `503` when no index exists; `500` generic "internal server error" (details logged server-side) |
+| `/api/presign?key=`  | GET    | Temporary redirect to a time-limited S3 presigned URL | `400` for missing key; `500` generic "internal server error" (details logged server-side) |
 | `/api/health`        | GET    | `ok`                                                                                                      | -                                                                      |
 
 ## Frontend Tooling
