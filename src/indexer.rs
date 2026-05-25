@@ -1,9 +1,11 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use std::path::Path;
 
 use anyhow::Context;
-use tantivy::schema::Value;
-use tantivy::{doc, Term, TantivyDocument};
+use tantivy::collector::TopDocs;
+use tantivy::query::TermQuery;
+use tantivy::schema::{IndexRecordOption, Value};
+use tantivy::{doc, Searcher, Term, TantivyDocument};
 
 use crate::search;
 
@@ -40,8 +42,6 @@ const TEXT_APP_TYPES: &[&str] = &[
     "application/sql",
 ];
 
-const STORE_READER_CACHE_NUM_BLOCKS: usize = 0;
-
 fn is_text_by_name(key: &str) -> bool {
     let path = Path::new(key);
 
@@ -63,47 +63,22 @@ fn is_text_by_name(key: &str) -> bool {
 }
 
 fn is_text_content_type(content_type: &str) -> bool {
-    content_type.starts_with("text/") || TEXT_APP_TYPES.iter().any(|&t| content_type == t)
+    content_type.starts_with("text/") || TEXT_APP_TYPES.contains(&content_type)
 }
 
-fn load_existing_index(index: &tantivy::Index, schema: &search::SearchSchema) -> HashMap<String, String> {
-    let reader = match index.reader() {
-        Ok(r) => r,
-        Err(_) => return HashMap::new(),
-    };
-    let searcher = reader.searcher();
-    let mut existing = HashMap::new();
-
-    for segment_reader in searcher.segment_readers() {
-        let store_reader = match segment_reader.get_store_reader(STORE_READER_CACHE_NUM_BLOCKS) {
-            Ok(r) => r,
-            Err(_) => continue,
-        };
-        for doc_id in 0..segment_reader.max_doc() {
-            if segment_reader.is_deleted(doc_id) {
-                continue;
-            }
-            let doc: TantivyDocument = match store_reader.get(doc_id) {
-                Ok(d) => d,
-                Err(_) => continue,
-            };
-            let key = doc
-                .get_first(schema.key)
-                .and_then(|v| v.as_str())
-                .unwrap_or("")
-                .to_string();
-            let last_modified = doc
-                .get_first(schema.last_modified)
-                .and_then(|v| v.as_str())
-                .unwrap_or("")
-                .to_string();
-            if !key.is_empty() {
-                existing.insert(key, last_modified);
-            }
-        }
-    }
-
-    existing
+fn lookup_last_modified(
+    searcher: &Searcher,
+    schema: &search::SearchSchema,
+    key: &str,
+) -> Option<String> {
+    let term = Term::from_field_text(schema.key_raw, key);
+    let query = TermQuery::new(term, IndexRecordOption::Basic);
+    let top_docs = searcher.search(&query, &TopDocs::with_limit(1).order_by_score()).ok()?;
+    let (_score, doc_address) = top_docs.first()?;
+    let doc: TantivyDocument = searcher.doc(*doc_address).ok()?;
+    doc.get_first(schema.last_modified)
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string())
 }
 
 pub async fn run_indexer(config: &crate::config::AppConfig) -> anyhow::Result<()> {
@@ -114,8 +89,7 @@ pub async fn run_indexer(config: &crate::config::AppConfig) -> anyhow::Result<()
         search::index_path(&config.tantivy_index_path, &config.aws_endpoint_url, &config.s3_bucket_name)?;
     let index = search::open_or_create_index(&index_path, &search_schema.schema)?;
 
-    let existing = load_existing_index(&index, &search_schema);
-    println!("existing index: {} documents", existing.len());
+    let lookup_searcher = index.reader().ok().map(|r| r.searcher());
 
     let mut writer = index
         .writer(50_000_000)
@@ -153,11 +127,12 @@ pub async fn run_indexer(config: &crate::config::AppConfig) -> anyhow::Result<()
 
             seen_keys.insert(key.clone());
 
-            if let Some(indexed_modified) = existing.get(&key) {
-                if *indexed_modified == last_modified {
-                    unchanged += 1;
-                    continue;
-                }
+            if let Some(searcher) = &lookup_searcher
+                && let Some(indexed_modified) = lookup_last_modified(searcher, &search_schema, &key)
+                && indexed_modified == last_modified
+            {
+                unchanged += 1;
+                continue;
             }
 
             let is_text = if is_text_by_name(&key) {
@@ -172,16 +147,17 @@ pub async fn run_indexer(config: &crate::config::AppConfig) -> anyhow::Result<()
                 {
                     Ok(head) => head
                         .content_type()
-                        .is_some_and(|ct| is_text_content_type(ct)),
+                        .is_some_and(is_text_content_type),
                     Err(_) => false,
                 }
             };
 
             if !is_text {
                 println!("indexing (filename only): {key}");
-                writer.delete_term(Term::from_field_text(search_schema.key, &key));
+                writer.delete_term(Term::from_field_text(search_schema.key_raw, &key));
                 writer.add_document(doc!(
                     search_schema.key => key.as_str(),
+                    search_schema.key_raw => key.as_str(),
                     search_schema.size => size,
                     search_schema.last_modified => last_modified.as_str(),
                 ))?;
@@ -211,12 +187,13 @@ pub async fn run_indexer(config: &crate::config::AppConfig) -> anyhow::Result<()
                     }
                 };
 
-                writer.delete_term(Term::from_field_text(search_schema.key, &key));
+                writer.delete_term(Term::from_field_text(search_schema.key_raw, &key));
                 let text = String::from_utf8(body.into()).ok();
 
                 if let Some(text) = &text {
                     writer.add_document(doc!(
                         search_schema.key => key.as_str(),
+                        search_schema.key_raw => key.as_str(),
                         search_schema.content => text.as_str(),
                         search_schema.size => size,
                         search_schema.last_modified => last_modified.as_str(),
@@ -226,6 +203,7 @@ pub async fn run_indexer(config: &crate::config::AppConfig) -> anyhow::Result<()
                     println!("  non-utf8, indexing filename only");
                     writer.add_document(doc!(
                         search_schema.key => key.as_str(),
+                        search_schema.key_raw => key.as_str(),
                         search_schema.size => size,
                         search_schema.last_modified => last_modified.as_str(),
                     ))?;
@@ -234,7 +212,7 @@ pub async fn run_indexer(config: &crate::config::AppConfig) -> anyhow::Result<()
             }
 
             let total_indexed = indexed + indexed_filename_only;
-            if total_indexed % 100 == 0 {
+            if total_indexed.is_multiple_of(100) {
                 writer.commit()?;
                 println!("progress: indexed {total_indexed} files...");
             }
@@ -247,10 +225,27 @@ pub async fn run_indexer(config: &crate::config::AppConfig) -> anyhow::Result<()
         }
     }
 
-    for key in existing.keys() {
-        if !seen_keys.contains(key) {
-            writer.delete_term(Term::from_field_text(search_schema.key, key));
-            removed += 1;
+    if let Some(searcher) = &lookup_searcher {
+        for segment_reader in searcher.segment_readers() {
+            let Ok(store_reader) = segment_reader.get_store_reader(0) else {
+                continue;
+            };
+            for doc_id in 0..segment_reader.max_doc() {
+                if segment_reader.is_deleted(doc_id) {
+                    continue;
+                }
+                let Ok(doc) = store_reader.get::<TantivyDocument>(doc_id) else {
+                    continue;
+                };
+                let key = doc
+                    .get_first(search_schema.key_raw)
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("");
+                if !key.is_empty() && !seen_keys.contains(key) {
+                    writer.delete_term(Term::from_field_text(search_schema.key_raw, key));
+                    removed += 1;
+                }
+            }
         }
     }
 

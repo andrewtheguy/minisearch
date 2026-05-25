@@ -10,6 +10,7 @@ const JIEBA_TOKENIZER_NAME: &str = "jieba";
 pub struct SearchSchema {
     pub schema: Schema,
     pub key: Field,
+    pub key_raw: Field,
     pub content: Field,
     pub size: Field,
     pub last_modified: Field,
@@ -25,12 +26,14 @@ pub fn build_schema() -> SearchSchema {
         )
         .set_stored();
     let key = builder.add_text_field("key", text_options.clone());
+    let key_raw = builder.add_text_field("key_raw", STRING | STORED);
     let content = builder.add_text_field("content", text_options);
     let size = builder.add_u64_field("size", STORED);
     let last_modified = builder.add_text_field("last_modified", STRING | STORED);
     SearchSchema {
         schema: builder.build(),
         key,
+        key_raw,
         content,
         size,
         last_modified,
@@ -73,7 +76,14 @@ pub fn index_path(tantivy_index_path: &str, aws_endpoint_url: &str, s3_bucket_na
 
 pub fn open_or_create_index(path: &Path, schema: &Schema) -> anyhow::Result<Index> {
     let index = if path.exists() {
-        Index::open_in_dir(path).context("failed to open existing index")?
+        let index = Index::open_in_dir(path).context("failed to open existing index")?;
+        if index.schema() != *schema {
+            bail!(
+                "index schema mismatch at {path} — delete the index directory and re-run",
+                path = path.display(),
+            );
+        }
+        index
     } else {
         std::fs::create_dir_all(path).context("failed to create index directory")?;
         Index::create_in_dir(path, schema.clone()).context("failed to create new index")?

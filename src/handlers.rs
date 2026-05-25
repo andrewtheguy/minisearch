@@ -155,10 +155,10 @@ const MAX_SNIPPET_CHARS: usize = 150;
 fn query_terms_for_field(query: &dyn TantivyQuery, field: Field) -> BTreeSet<String> {
     let mut terms = BTreeSet::new();
     query.query_terms(&mut |term, _| {
-        if term.field() == field {
-            if let Some(term_str) = term.value().as_str() {
-                terms.insert(term_str.to_lowercase());
-            }
+        if term.field() == field
+            && let Some(term_str) = term.value().as_str()
+        {
+            terms.insert(term_str.to_lowercase());
         }
     });
     terms
