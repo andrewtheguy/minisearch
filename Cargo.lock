@@ -1259,6 +1259,7 @@ dependencies = [
  "tantivy",
  "tantivy-jieba",
  "tokio",
+ "url",
 ]
 
 [[package]]

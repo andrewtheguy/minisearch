@@ -43,9 +43,19 @@ pub fn register_tokenizers(index: &Index) {
 }
 
 pub fn index_path() -> PathBuf {
-    std::env::var("TANTIVY_INDEX_PATH")
+    let base = std::env::var("TANTIVY_INDEX_PATH")
         .map(PathBuf::from)
-        .unwrap_or_else(|_| PathBuf::from("./tantivy_index"))
+        .unwrap_or_else(|_| PathBuf::from("./tantivy_index"));
+
+    let host = std::env::var("AWS_ENDPOINT_URL")
+        .ok()
+        .and_then(|u| url::Url::parse(&u).ok())
+        .and_then(|u| u.host_str().map(|h| h.to_string()))
+        .unwrap_or_else(|| "default".to_string());
+
+    let bucket = std::env::var("S3_BUCKET_NAME").unwrap_or_else(|_| "default".to_string());
+
+    base.join(host).join(bucket)
 }
 
 pub fn open_or_create_index(path: &Path, schema: &Schema) -> tantivy::Result<Index> {

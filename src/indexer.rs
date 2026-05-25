@@ -176,10 +176,9 @@ pub async fn run_indexer() {
                 }
             };
 
-            writer.delete_term(Term::from_field_text(search_schema.key, &key));
-
             if !is_text {
                 println!("indexing (filename only): {key}");
+                writer.delete_term(Term::from_field_text(search_schema.key, &key));
                 writer
                     .add_document(doc!(
                         search_schema.key => key.as_str(),
@@ -213,6 +212,7 @@ pub async fn run_indexer() {
                     }
                 };
 
+                writer.delete_term(Term::from_field_text(search_schema.key, &key));
                 let text = String::from_utf8(body.into()).ok();
 
                 if let Some(text) = &text {

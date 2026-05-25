@@ -16,3 +16,4 @@ mime_guess = "2.0.5"
 tantivy = "0.26.1"
 clap = { version = "4", features = ["derive"] }
 tantivy-jieba = "0.20.0"
+url = "2.5.8"
