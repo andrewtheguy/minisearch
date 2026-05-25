@@ -28,10 +28,18 @@ pub struct SearchResponse {
 #[derive(Serialize)]
 pub struct SearchResult {
     pub key: String,
-    pub snippet_html: String,
+    pub snippet: Vec<SearchSnippetSegment>,
     pub score: f32,
     pub size: u64,
     pub last_modified: String,
+}
+
+#[derive(Debug, Eq, PartialEq, Serialize)]
+pub struct SearchSnippetSegment {
+    pub text: String,
+    pub highlighted: bool,
+    pub start: usize,
+    pub end: usize,
 }
 
 pub async fn search(
@@ -96,12 +104,11 @@ pub async fn search(
             .to_string();
 
         let content = doc_text(&doc, schema.content);
-        let snippet_html =
-            render_snippet_html(&content, snippet_tokenizer.clone(), &snippet_terms);
+        let snippet = render_snippet(&content, snippet_tokenizer.clone(), &snippet_terms);
 
         results.push(SearchResult {
             key,
-            snippet_html,
+            snippet,
             score: *score,
             size,
             last_modified,
@@ -142,11 +149,11 @@ fn doc_text(doc: &TantivyDocument, field: Field) -> String {
     text
 }
 
-fn render_snippet_html(
+fn render_snippet(
     text: &str,
     mut tokenizer: TextAnalyzer,
     terms: &BTreeSet<String>,
-) -> String {
+) -> Vec<SearchSnippetSegment> {
     let ranges = highlight_ranges(text, &mut tokenizer, terms);
     let fragment = best_fragment(text, &ranges, MAX_SNIPPET_CHARS);
     let visible_ranges = ranges
@@ -162,7 +169,7 @@ fn render_snippet_html(
         })
         .collect::<Vec<_>>();
 
-    highlighted_html(&text[fragment], &visible_ranges)
+    snippet_segments(&text[fragment], &visible_ranges)
 }
 
 fn highlight_ranges(
@@ -261,30 +268,35 @@ fn byte_to_char_index(char_offsets: &[usize], byte_offset: usize) -> usize {
     }
 }
 
-fn highlighted_html(fragment: &str, ranges: &[Range<usize>]) -> String {
-    let mut html = String::new();
+fn snippet_segments(fragment: &str, ranges: &[Range<usize>]) -> Vec<SearchSnippetSegment> {
+    let mut segments = Vec::new();
     let mut start_from = 0usize;
     for range in ranges {
-        push_escaped_html(&mut html, &fragment[start_from..range.start]);
-        html.push_str("<b>");
-        push_escaped_html(&mut html, &fragment[range.clone()]);
-        html.push_str("</b>");
+        if start_from < range.start {
+            segments.push(SearchSnippetSegment {
+                text: fragment[start_from..range.start].to_string(),
+                highlighted: false,
+                start: start_from,
+                end: range.start,
+            });
+        }
+        segments.push(SearchSnippetSegment {
+            text: fragment[range.clone()].to_string(),
+            highlighted: true,
+            start: range.start,
+            end: range.end,
+        });
         start_from = range.end;
     }
-    push_escaped_html(&mut html, &fragment[start_from..]);
-    html
-}
-
-fn push_escaped_html(html: &mut String, value: &str) {
-    for ch in value.chars() {
-        match ch {
-            '&' => html.push_str("&amp;"),
-            '<' => html.push_str("&lt;"),
-            '>' => html.push_str("&gt;"),
-            '"' => html.push_str("&quot;"),
-            _ => html.push(ch),
-        }
+    if start_from < fragment.len() {
+        segments.push(SearchSnippetSegment {
+            text: fragment[start_from..].to_string(),
+            highlighted: false,
+            start: start_from,
+            end: fragment.len(),
+        });
     }
+    segments
 }
 
 #[cfg(test)]
@@ -302,27 +314,54 @@ mod tests {
     }
 
     #[test]
-    fn render_snippet_html_handles_chinese_search_terms() {
+    fn render_snippet_handles_chinese_search_terms() {
         let terms = jieba_terms("朱古力");
-        let html = render_snippet_html(
+        let snippet = render_snippet(
             "甜品朱古力蛋糕 & <menu>",
             TextAnalyzer::from(tantivy_jieba::JiebaTokenizer::new()),
             &terms,
         );
 
-        assert_eq!(html, "甜品<b>朱古力</b>蛋糕 &amp; &lt;menu&gt;");
+        assert_eq!(
+            snippet,
+            vec![
+                SearchSnippetSegment {
+                    text: "甜品".to_string(),
+                    highlighted: false,
+                    start: 0,
+                    end: 6,
+                },
+                SearchSnippetSegment {
+                    text: "朱古力".to_string(),
+                    highlighted: true,
+                    start: 6,
+                    end: 15,
+                },
+                SearchSnippetSegment {
+                    text: "蛋糕 & <menu>".to_string(),
+                    highlighted: false,
+                    start: 15,
+                    end: 30,
+                },
+            ],
+        );
     }
 
     #[test]
-    fn render_snippet_html_ignores_highlights_outside_selected_fragment() {
+    fn render_snippet_ignores_highlights_outside_selected_fragment() {
         let terms = BTreeSet::from(["alpha".to_string(), "omega".to_string()]);
-        let html = render_snippet_html(
+        let snippet = render_snippet(
             &format!("alpha {} omega omega", "middle ".repeat(200)),
             TextAnalyzer::from(tantivy::tokenizer::SimpleTokenizer::default()),
             &terms,
         );
+        let highlighted = snippet
+            .iter()
+            .filter(|segment| segment.highlighted)
+            .map(|segment| segment.text.as_str())
+            .collect::<Vec<_>>();
 
-        assert!(html.contains("<b>omega</b> <b>omega</b>"));
+        assert_eq!(highlighted, vec!["omega", "omega"]);
     }
 }
 

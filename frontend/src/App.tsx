@@ -3,10 +3,17 @@ import "./App.css";
 
 interface SearchResult {
   key: string;
-  snippet_html: string;
+  snippet: SearchSnippetSegment[];
   score: number;
   size: number;
   last_modified: string;
+}
+
+interface SearchSnippetSegment {
+  text: string;
+  highlighted: boolean;
+  start: number;
+  end: number;
 }
 
 interface SearchResponse {
@@ -144,11 +151,15 @@ function App() {
                 {formatBytes(result.size)} &middot;{" "}
                 {new Date(result.last_modified).toLocaleString()}
               </div>
-              <div
-                className="result-snippet"
-                // biome-ignore lint/security/noDangerouslySetInnerHtml: snippet_html is backend-generated with escaped text and only <b> highlights.
-                dangerouslySetInnerHTML={{ __html: result.snippet_html }}
-              />
+              <div className="result-snippet">
+                {result.snippet.map((segment) =>
+                  segment.highlighted ? (
+                    <b key={`${segment.start}-${segment.end}-highlight`}>{segment.text}</b>
+                  ) : (
+                    <span key={`${segment.start}-${segment.end}-text`}>{segment.text}</span>
+                  ),
+                )}
+              </div>
             </div>
           ))}
         </div>
