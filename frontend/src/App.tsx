@@ -578,10 +578,7 @@ function BrowseView({ profileName, prefix }: { profileName: string; prefix: stri
                     size="sm"
                     disabled={browsePageIndex === 0 || browseLoading}
                     onClick={() =>
-                      fetchBrowsePage(
-                        pageTokens[browsePageIndex - 1] ?? null,
-                        browsePageIndex - 1,
-                      )
+                      fetchBrowsePage(pageTokens[browsePageIndex - 1] ?? null, browsePageIndex - 1)
                     }
                   >
                     Previous
@@ -592,10 +589,7 @@ function BrowseView({ profileName, prefix }: { profileName: string; prefix: stri
                     size="sm"
                     disabled={!isTruncated || browseLoading}
                     onClick={() =>
-                      fetchBrowsePage(
-                        pageTokens[browsePageIndex + 1] ?? null,
-                        browsePageIndex + 1,
-                      )
+                      fetchBrowsePage(pageTokens[browsePageIndex + 1] ?? null, browsePageIndex + 1)
                     }
                   >
                     Next
