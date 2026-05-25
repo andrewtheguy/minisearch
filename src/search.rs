@@ -1,5 +1,6 @@
 use std::path::{Path, PathBuf};
 
+use anyhow::{bail, Context};
 use tantivy::schema::{Field, Schema, TextFieldIndexing, TextOptions, STORED, STRING};
 use tantivy::Index;
 
@@ -42,18 +43,46 @@ pub fn register_tokenizers(index: &Index) {
         .register(JIEBA_TOKENIZER_NAME, tantivy_jieba::JiebaTokenizer::new());
 }
 
-pub fn index_path() -> PathBuf {
-    std::env::var("TANTIVY_INDEX_PATH")
-        .map(PathBuf::from)
-        .unwrap_or_else(|_| PathBuf::from("./tantivy_index"))
+fn endpoint_index_host(endpoint_url: &str) -> anyhow::Result<String> {
+    let url = url::Url::parse(endpoint_url).context("AWS_ENDPOINT_URL must be a valid URL")?;
+    let host = url
+        .host()
+        .context("AWS_ENDPOINT_URL must include a host")?;
+    match host {
+        url::Host::Domain(host) => Ok(host.to_string()),
+        url::Host::Ipv4(_) | url::Host::Ipv6(_) => {
+            bail!("AWS_ENDPOINT_URL host must be a hostname, not an IP address")
+        }
+    }
 }
 
-pub fn open_or_create_index(path: &Path, schema: &Schema) -> tantivy::Result<Index> {
+pub struct IndexPathResult {
+    pub path: PathBuf,
+    pub bucket: String,
+}
+
+pub fn index_path() -> anyhow::Result<IndexPathResult> {
+    let base = std::env::var("TANTIVY_INDEX_PATH")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| PathBuf::from("./tantivy_index"));
+
+    let endpoint_url =
+        std::env::var("AWS_ENDPOINT_URL").context("AWS_ENDPOINT_URL must be set")?;
+    let host = endpoint_index_host(&endpoint_url)?;
+    let bucket = std::env::var("S3_BUCKET_NAME").context("S3_BUCKET_NAME must be set")?;
+
+    Ok(IndexPathResult {
+        path: base.join(&host).join(&bucket),
+        bucket,
+    })
+}
+
+pub fn open_or_create_index(path: &Path, schema: &Schema) -> anyhow::Result<Index> {
     let index = if path.exists() {
-        Index::open_in_dir(path)?
+        Index::open_in_dir(path).context("failed to open existing index")?
     } else {
-        std::fs::create_dir_all(path)?;
-        Index::create_in_dir(path, schema.clone())?
+        std::fs::create_dir_all(path).context("failed to create index directory")?;
+        Index::create_in_dir(path, schema.clone()).context("failed to create new index")?
     };
     register_tokenizers(&index);
     Ok(index)
@@ -66,5 +95,36 @@ pub fn open_index(path: &Path) -> Option<Index> {
         Some(index)
     } else {
         None
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::endpoint_index_host;
+
+    #[test]
+    fn endpoint_index_host_uses_hostname_without_port() {
+        assert_eq!(
+            endpoint_index_host("https://minio.example.test:9000").unwrap(),
+            "minio.example.test"
+        );
+    }
+
+    #[test]
+    fn endpoint_index_host_rejects_ipv4_addresses() {
+        let err = endpoint_index_host("http://127.0.0.1:9000").unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "AWS_ENDPOINT_URL host must be a hostname, not an IP address"
+        );
+    }
+
+    #[test]
+    fn endpoint_index_host_rejects_ipv6_addresses() {
+        let err = endpoint_index_host("http://[::1]:9000").unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "AWS_ENDPOINT_URL host must be a hostname, not an IP address"
+        );
     }
 }

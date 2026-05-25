@@ -2,8 +2,9 @@ use std::collections::BTreeSet;
 use std::ops::Range;
 use std::time::Duration;
 
+use anyhow::Context;
 use aws_sdk_s3::presigning::PresigningConfig;
-use axum::{extract::Query, extract::State, http::StatusCode, Json};
+use axum::{extract::Query, extract::State, Json};
 use serde::{Deserialize, Serialize};
 use tantivy::collector::{Count, TopDocs};
 use tantivy::query::{Query as TantivyQuery, QueryParser};
@@ -11,6 +12,7 @@ use tantivy::schema::{Field, Value};
 use tantivy::tokenizer::{TextAnalyzer, TokenStream};
 use tantivy::TantivyDocument;
 
+use crate::error::AppError;
 use crate::state::AppState;
 
 #[derive(Deserialize)]
@@ -46,48 +48,51 @@ pub struct SearchSnippetSegment {
 pub async fn search(
     State(state): State<AppState>,
     Query(params): Query<SearchParams>,
-) -> Result<Json<SearchResponse>, (StatusCode, String)> {
+) -> Result<Json<SearchResponse>, AppError> {
     let query_str = params
         .q
         .filter(|q| !q.trim().is_empty())
-        .ok_or((StatusCode::BAD_REQUEST, "missing or empty query parameter 'q'".into()))?;
+        .ok_or_else(|| AppError::bad_request("missing or empty query parameter 'q'"))?;
 
     let schema = state
         .search_schema
         .as_ref()
-        .ok_or((StatusCode::SERVICE_UNAVAILABLE, "search index not available — run `cargo run -- index` first".into()))?;
+        .ok_or_else(|| {
+            AppError::unavailable(
+                "search index not available — run `cargo run -- index` first",
+            )
+        })?;
 
     let reader = state
         .search_reader
         .as_ref()
-        .ok_or((StatusCode::SERVICE_UNAVAILABLE, "search index not available — run `cargo run -- index` first".into()))?;
+        .ok_or_else(|| {
+            AppError::unavailable(
+                "search index not available — run `cargo run -- index` first",
+            )
+        })?;
 
     let searcher = reader.searcher();
     let query_parser = QueryParser::for_index(searcher.index(), vec![schema.key, schema.content]);
     let query = query_parser
         .parse_query(&query_str)
-        .map_err(|e| (StatusCode::BAD_REQUEST, format!("invalid query: {e}")))?;
+        .map_err(|e| AppError::bad_request(format!("invalid query: {e}")))?;
 
     let (total_count, top_docs) = searcher
         .search(&query, &(Count, TopDocs::with_limit(SEARCH_RESULT_LIMIT).order_by_score()))
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, format!("search failed: {e}")))?;
+        .context("search failed")?;
 
     let snippet_terms = query_terms_for_field(&*query, schema.content);
     let snippet_tokenizer = searcher
         .index()
         .tokenizer_for_field(schema.content)
-        .map_err(|e| {
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                format!("snippet tokenizer failed: {e}"),
-            )
-        })?;
+        .context("snippet tokenizer failed")?;
 
     let mut results = Vec::with_capacity(top_docs.len());
     for (score, doc_address) in &top_docs {
         let doc: TantivyDocument = searcher
             .doc(*doc_address)
-            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, format!("failed to retrieve doc: {e}")))?;
+            .context("failed to retrieve doc")?;
 
         let key = doc
             .get_first(schema.key)
@@ -366,6 +371,12 @@ mod tests {
 
         assert_eq!(highlighted, vec!["omega", "omega"]);
     }
+
+    #[test]
+    fn m4a_mime_type_is_audio_mp4() {
+        let mime = new_mime_guess::from_path("test.m4a").first_or_octet_stream();
+        assert_eq!(mime, "audio/mp4");
+    }
 }
 
 #[derive(Deserialize)]
@@ -376,21 +387,21 @@ pub struct PresignParams {
 pub async fn presign(
     State(state): State<AppState>,
     Query(params): Query<PresignParams>,
-) -> Result<axum::response::Redirect, (StatusCode, String)> {
+) -> Result<axum::response::Redirect, AppError> {
     let key = params
         .key
         .filter(|k| !k.trim().is_empty())
-        .ok_or((StatusCode::BAD_REQUEST, "missing or empty query parameter 'key'".into()))?;
+        .ok_or_else(|| AppError::bad_request("missing or empty query parameter 'key'"))?;
 
-    let mime = mime_guess::from_path(&key).first_or_octet_stream();
-    let content_type = if mime.type_() == mime_guess::mime::TEXT {
+    let mime = new_mime_guess::from_path(&key).first_or_octet_stream();
+    let content_type = if mime.type_() == "text" {
         format!("{mime}; charset=utf-8")
     } else {
         mime.to_string()
     };
 
     let presign_config = PresigningConfig::expires_in(Duration::from_secs(3600))
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, format!("presign config error: {e}")))?;
+        .context("presign config error")?;
 
     let presigned = state
         .s3_client
@@ -401,7 +412,7 @@ pub async fn presign(
         .response_content_disposition("inline")
         .presigned(presign_config)
         .await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, format!("presign failed: {e}")))?;
+        .context("presign failed")?;
 
     Ok(axum::response::Redirect::temporary(presigned.uri()))
 }

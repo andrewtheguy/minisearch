@@ -1247,18 +1247,21 @@ checksum = "42703706b716c37f96a77aea830392ad231f44c9e9a67872fa5548707e11b11c"
 name = "fts-everywhere"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
  "aws-config",
  "aws-sdk-s3",
  "axum",
  "clap",
  "dotenvy",
- "mime_guess",
+ "new_mime_guess",
  "rust-embed",
  "serde",
  "serde_json",
  "tantivy",
  "tantivy-jieba",
+ "thiserror",
  "tokio",
+ "url",
 ]
 
 [[package]]
@@ -2015,16 +2018,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6877bb514081ee2a7ff5ef9de3281f14a4dd4bceac4c09388074a6b5df8a139a"
 
 [[package]]
-name = "mime_guess"
-version = "2.0.5"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f7c44f8e672c00fe5308fa235f821cb4198414e1c77935c1ab6948d3fd78550e"
-dependencies = [
- "mime",
- "unicase",
-]
-
-[[package]]
 name = "minimal-lexical"
 version = "0.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2046,6 +2039,16 @@ name = "murmurhash32"
 version = "0.3.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2195bf6aa996a481483b29d62a7663eed3fe39600c460e323f8ff41e90bdd89b"
+
+[[package]]
+name = "new_mime_guess"
+version = "4.0.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "02a2dfb3559d53e90b709376af1c379462f7fb3085a0177deb73e6ea0d99eff4"
+dependencies = [
+ "mime",
+ "unicase",
+]
 
 [[package]]
 name = "no_std_io2"
