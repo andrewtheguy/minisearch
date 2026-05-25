@@ -2045,7 +2045,7 @@ checksum = "68354c5c6bd36d73ff3feceb05efa59b6acb7626617f4962be322a825e61f79a"
 
 [[package]]
 name = "minisearch"
-version = "0.0.3"
+version = "0.0.4"
 dependencies = [
  "anyhow",
  "aws-config",
@@ -2060,6 +2060,7 @@ dependencies = [
  "serde_json",
  "tantivy",
  "tantivy-jieba",
+ "tempfile",
  "thiserror",
  "tokio",
  "toml",

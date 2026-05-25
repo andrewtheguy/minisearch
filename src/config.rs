@@ -37,6 +37,7 @@ impl ProfileConfig {
 
 #[derive(serde::Deserialize)]
 pub struct AppConfig {
+    #[serde(default)]
     pub profiles: Vec<ProfileConfig>,
 }
 
@@ -44,15 +45,27 @@ impl AppConfig {
     pub fn load(path: &Path) -> anyhow::Result<Self> {
         let contents = std::fs::read_to_string(path)
             .with_context(|| format!("failed to read config file: {}", path.display()))?;
-        let config: Self = toml::from_str(&contents)
-            .with_context(|| format!("failed to parse config file: {}", path.display()))?;
+        Self::from_toml_str(&contents)
+            .with_context(|| format!("failed to load config file: {}", path.display()))
+    }
 
-        if config.profiles.is_empty() {
+    fn from_toml_str(contents: &str) -> anyhow::Result<Self> {
+        let config = Self::parse_toml(contents)?;
+        config.validate()?;
+        Ok(config)
+    }
+
+    fn parse_toml(contents: &str) -> Result<Self, toml::de::Error> {
+        toml::from_str(contents)
+    }
+
+    fn validate(&self) -> anyhow::Result<()> {
+        if self.profiles.is_empty() {
             bail!("config must contain at least one [[profiles]] entry");
         }
 
         let mut seen = HashSet::new();
-        for profile in &config.profiles {
+        for profile in &self.profiles {
             if profile.name.is_empty() {
                 bail!("profile name must not be empty");
             }
@@ -71,6 +84,87 @@ impl AppConfig {
             }
         }
 
-        Ok(config)
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn profile_toml(name: &str) -> String {
+        format!(
+            r#"
+[[profiles]]
+name = "{name}"
+description = "Test profile"
+aws_access_key_id = "access"
+aws_secret_access_key = "secret"
+aws_region = "us-east-1"
+aws_endpoint_url = "http://localhost:9000"
+s3_bucket_name = "bucket"
+tantivy_index_path = "tmp/test-index-{name}"
+"#
+        )
+    }
+
+    fn parse_error(contents: &str) -> String {
+        match AppConfig::from_toml_str(contents) {
+            Ok(_) => panic!("expected config parse to fail"),
+            Err(err) => err.to_string(),
+        }
+    }
+
+    #[test]
+    fn parses_valid_profiles() {
+        let config = AppConfig::from_toml_str(&format!(
+            "{}{}",
+            profile_toml("docs"),
+            profile_toml("media_2026")
+        ))
+        .unwrap();
+
+        assert_eq!(config.profiles.len(), 2);
+        assert_eq!(config.profiles[0].name, "docs");
+        assert_eq!(config.profiles[1].name, "media_2026");
+    }
+
+    #[test]
+    fn rejects_config_without_profiles() {
+        let err = parse_error("");
+
+        assert_eq!(
+            err,
+            "config must contain at least one [[profiles]] entry"
+        );
+    }
+
+    #[test]
+    fn rejects_empty_profile_name() {
+        let err = parse_error(&profile_toml(""));
+
+        assert_eq!(err, "profile name must not be empty");
+    }
+
+    #[test]
+    fn rejects_invalid_profile_name() {
+        let err = parse_error(&profile_toml("Docs"));
+
+        assert_eq!(
+            err,
+            "profile name 'Docs' must contain only lowercase letters, digits, hyphens, and underscores"
+        );
+    }
+
+    #[test]
+    fn rejects_duplicate_profile_names() {
+        let contents = format!(
+            "{}{}",
+            profile_toml("docs"),
+            profile_toml("docs")
+        );
+        let err = parse_error(&contents);
+
+        assert_eq!(err, "duplicate profile name: 'docs'");
     }
 }

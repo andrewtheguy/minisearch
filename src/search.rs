@@ -76,3 +76,43 @@ pub fn open_index(path: &Path) -> Option<Index> {
         None
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn open_index_returns_none_for_missing_path() {
+        let dir = tempfile::tempdir().unwrap();
+        let missing_path = dir.path().join("missing");
+
+        assert!(open_index(&missing_path).is_none());
+    }
+
+    #[test]
+    fn open_or_create_index_reopens_existing_index() {
+        let dir = tempfile::tempdir().unwrap();
+        let index_path = dir.path().join("index");
+        let schema = build_schema();
+
+        let created = open_or_create_index(&index_path, &schema.schema).unwrap();
+        let reopened = open_or_create_index(&index_path, &schema.schema).unwrap();
+
+        assert_eq!(created.schema(), reopened.schema());
+    }
+
+    #[test]
+    fn open_or_create_index_rejects_schema_mismatch() {
+        let dir = tempfile::tempdir().unwrap();
+        let index_path = dir.path().join("index");
+        let schema = build_schema();
+        open_or_create_index(&index_path, &schema.schema).unwrap();
+
+        let mut builder = Schema::builder();
+        builder.add_text_field("different", STRING | STORED);
+        let mismatched_schema = builder.build();
+        let err = open_or_create_index(&index_path, &mismatched_schema).unwrap_err();
+
+        assert!(format!("{err:#}").contains("index schema mismatch"));
+    }
+}
