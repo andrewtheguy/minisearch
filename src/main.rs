@@ -6,11 +6,13 @@ mod indexer;
 mod search;
 mod state;
 
+use std::sync::{Arc, RwLock};
+
 use anyhow::Context;
 use axum::{routing::get, Router};
 use clap::Parser;
 use cli::{Cli, Commands};
-use state::AppState;
+use state::{AppState, SearchState};
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -26,25 +28,25 @@ async fn main() -> anyhow::Result<()> {
             let s3_client = aws_sdk_s3::Client::new(&aws_config);
 
             let search::IndexPathResult { path: index_path, bucket: bucket_name } = search::index_path()?;
-            let (search_reader, search_schema) = match search::open_index(&index_path) {
+            let search = match search::open_index(&index_path) {
                 Some(index) => {
                     let reader = index
                         .reader()
                         .context("failed to create index reader")?;
                     let schema = search::build_schema();
-                    (Some(reader), Some(schema))
+                    Arc::new(RwLock::new(Some(SearchState { reader, schema })))
                 }
                 None => {
-                    eprintln!("warning: search index not found at {index_path:?} — search will be unavailable");
-                    (None, None)
+                    eprintln!("warning: search index not found at {index_path:?} — search will be unavailable until index is created");
+                    Arc::new(RwLock::new(None))
                 }
             };
 
             let state = AppState {
                 s3_client,
                 bucket_name,
-                search_reader,
-                search_schema,
+                index_path,
+                search,
             };
 
             let app = Router::new()

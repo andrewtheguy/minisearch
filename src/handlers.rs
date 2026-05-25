@@ -13,7 +13,8 @@ use tantivy::tokenizer::{TextAnalyzer, TokenStream};
 use tantivy::TantivyDocument;
 
 use crate::error::AppError;
-use crate::state::AppState;
+use crate::search;
+use crate::state::{AppState, SearchState};
 
 #[derive(Deserialize)]
 pub struct SearchParams {
@@ -48,6 +49,29 @@ pub struct SearchSnippetSegment {
     pub end: usize,
 }
 
+fn get_or_init_search(state: &AppState) -> Result<SearchState, AppError> {
+    {
+        let guard = state.search.read().unwrap();
+        if let Some(s) = guard.as_ref() {
+            return Ok(s.clone());
+        }
+    }
+    let mut guard = state.search.write().unwrap();
+    if let Some(s) = guard.as_ref() {
+        return Ok(s.clone());
+    }
+    let index = search::open_index(&state.index_path).ok_or_else(|| {
+        AppError::unavailable("search index not available — run `minisearch index` first")
+    })?;
+    let reader = index
+        .reader()
+        .map_err(|e| AppError::Internal(anyhow::anyhow!(e).context("failed to create index reader")))?;
+    let schema = search::build_schema();
+    let search_state = SearchState { reader, schema };
+    *guard = Some(search_state.clone());
+    Ok(search_state)
+}
+
 pub async fn search(
     State(state): State<AppState>,
     Query(params): Query<SearchParams>,
@@ -57,23 +81,9 @@ pub async fn search(
         .filter(|q| !q.trim().is_empty())
         .ok_or_else(|| AppError::bad_request("missing or empty query parameter 'q'"))?;
 
-    let schema = state
-        .search_schema
-        .as_ref()
-        .ok_or_else(|| {
-            AppError::unavailable(
-                "search index not available — run `cargo run -- index` first",
-            )
-        })?;
-
-    let reader = state
-        .search_reader
-        .as_ref()
-        .ok_or_else(|| {
-            AppError::unavailable(
-                "search index not available — run `cargo run -- index` first",
-            )
-        })?;
+    let search_state = get_or_init_search(&state)?;
+    let schema = &search_state.schema;
+    let reader = &search_state.reader;
 
     let searcher = reader.searcher();
     let query_parser = QueryParser::for_index(searcher.index(), vec![schema.key, schema.content]);
