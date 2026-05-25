@@ -80,6 +80,15 @@ minisearch -c config.toml serve
 
 Open http://localhost:52378 to search your files.
 
+## Open file caveat
+
+S3 gateways serve files directly from the local filesystem. Files that are currently open or being written to by another process may cause issues:
+
+- **Indexing**: The indexer may read partial or inconsistent content from files that are actively being modified, leading to incomplete or corrupted index entries.
+- **Presigned URLs**: Downloading a file via a presigned URL while it is being written to may return truncated or mixed content.
+
+For best results, avoid indexing or serving files that are actively being modified. If you need to index a directory with frequently changing files, consider running the indexer during a quiet period or pointing the gateway at a snapshot/copy of the data.
+
 ## Security notes
 
 - MiniSearch never writes to S3. Even if the gateway allows writes, MiniSearch will not modify your files.
