@@ -2,6 +2,7 @@ use std::collections::HashSet;
 use std::path::Path;
 
 use anyhow::Context;
+use log::{debug, info, warn};
 use tantivy::collector::TopDocs;
 use tantivy::query::TermQuery;
 use tantivy::schema::{IndexRecordOption, Value};
@@ -153,7 +154,7 @@ pub async fn run_indexer(config: &crate::config::AppConfig) -> anyhow::Result<()
             };
 
             if !is_text {
-                println!("indexing (filename only): {key}");
+                debug!("indexing (filename only): {key}");
                 writer.delete_term(Term::from_field_text(search_schema.key_raw, &key));
                 writer.add_document(doc!(
                     search_schema.key => key.as_str(),
@@ -163,7 +164,7 @@ pub async fn run_indexer(config: &crate::config::AppConfig) -> anyhow::Result<()
                 ))?;
                 indexed_filename_only += 1;
             } else {
-                println!("indexing: {key}");
+                debug!("indexing: {key}");
 
                 let body = match s3_client
                     .get_object()
@@ -175,13 +176,13 @@ pub async fn run_indexer(config: &crate::config::AppConfig) -> anyhow::Result<()
                     Ok(output) => match output.body.collect().await {
                         Ok(bytes) => bytes.into_bytes(),
                         Err(e) => {
-                            eprintln!("warning: failed to read body for {key}: {e}");
+                            warn!("failed to read body for {key}: {e}");
                             failed += 1;
                             continue;
                         }
                     },
                     Err(e) => {
-                        eprintln!("warning: failed to download {key}: {e}");
+                        warn!("failed to download {key}: {e}");
                         failed += 1;
                         continue;
                     }
@@ -200,7 +201,7 @@ pub async fn run_indexer(config: &crate::config::AppConfig) -> anyhow::Result<()
                     ))?;
                     indexed += 1;
                 } else {
-                    println!("  non-utf8, indexing filename only");
+                    debug!("non-utf8, indexing filename only: {key}");
                     writer.add_document(doc!(
                         search_schema.key => key.as_str(),
                         search_schema.key_raw => key.as_str(),
@@ -214,7 +215,7 @@ pub async fn run_indexer(config: &crate::config::AppConfig) -> anyhow::Result<()
             let total_indexed = indexed + indexed_filename_only;
             if total_indexed.is_multiple_of(100) {
                 writer.commit()?;
-                println!("progress: indexed {total_indexed} files...");
+                info!("progress: indexed {total_indexed} files...");
             }
         }
 
@@ -251,11 +252,11 @@ pub async fn run_indexer(config: &crate::config::AppConfig) -> anyhow::Result<()
 
     writer.commit()?;
     let total = indexed + indexed_filename_only + unchanged + failed;
-    println!("\ndone: {total} files total");
-    println!("  indexed (full):       {indexed}");
-    println!("  indexed (filename):   {indexed_filename_only}");
-    println!("  unchanged:            {unchanged}");
-    println!("  removed:              {removed}");
-    println!("  failed:               {failed}");
+    info!("done: {total} files total");
+    info!("  indexed (full):       {indexed}");
+    info!("  indexed (filename):   {indexed_filename_only}");
+    info!("  unchanged:            {unchanged}");
+    info!("  removed:              {removed}");
+    info!("  failed:               {failed}");
     Ok(())
 }

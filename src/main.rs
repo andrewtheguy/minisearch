@@ -13,10 +13,13 @@ use anyhow::Context;
 use axum::{routing::get, Router};
 use clap::Parser;
 use cli::{Cli, Commands};
+use log::{info, warn};
 use state::{AppState, SearchState};
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
+    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
+
     let cli = Cli::parse();
     let config = config::AppConfig::load(&cli.config)?;
 
@@ -38,7 +41,7 @@ async fn main() -> anyhow::Result<()> {
                     Arc::new(RwLock::new(Some(SearchState { reader, schema })))
                 }
                 None => {
-                    eprintln!("warning: search index not found at {index_path:?} — search will be unavailable until index is created");
+                    warn!("search index not found at {index_path:?} — search will be unavailable until index is created");
                     Arc::new(RwLock::new(None))
                 }
             };
@@ -60,7 +63,7 @@ async fn main() -> anyhow::Result<()> {
             let listener = tokio::net::TcpListener::bind("0.0.0.0:3000")
                 .await
                 .context("failed to bind to port 3000")?;
-            println!("listening on http://localhost:3000");
+            info!("listening on http://localhost:3000");
             axum::serve(listener, app)
                 .await
                 .context("server error")?;
