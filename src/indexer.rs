@@ -121,10 +121,9 @@ pub async fn run_indexer() {
     let mut writer = index.writer(50_000_000).expect("failed to create index writer");
 
     let mut indexed = 0usize;
+    let mut indexed_filename_only = 0usize;
     let mut unchanged = 0usize;
     let mut removed = 0usize;
-    let mut skipped_non_text = 0usize;
-    let mut skipped_non_utf8 = 0usize;
     let mut failed = 0usize;
     let mut seen_keys = HashSet::new();
     let mut continuation_token: Option<String> = None;
@@ -160,7 +159,9 @@ pub async fn run_indexer() {
                 }
             }
 
-            if !is_text_by_name(&key) {
+            let is_text = if is_text_by_name(&key) {
+                true
+            } else {
                 match s3_client
                     .head_object()
                     .bucket(&bucket_name)
@@ -168,69 +169,79 @@ pub async fn run_indexer() {
                     .send()
                     .await
                 {
-                    Ok(head) => {
-                        let is_text = head
-                            .content_type()
-                            .is_some_and(|ct| is_text_content_type(ct));
-                        if !is_text {
-                            skipped_non_text += 1;
-                            continue;
-                        }
-                    }
-                    Err(_) => {
-                        skipped_non_text += 1;
-                        continue;
-                    }
+                    Ok(head) => head
+                        .content_type()
+                        .is_some_and(|ct| is_text_content_type(ct)),
+                    Err(_) => false,
                 }
-            }
-
-            println!("indexing: {key}");
+            };
 
             writer.delete_term(Term::from_field_text(search_schema.key, &key));
 
-            let body = match s3_client
-                .get_object()
-                .bucket(&bucket_name)
-                .key(&key)
-                .send()
-                .await
-            {
-                Ok(output) => match output.body.collect().await {
-                    Ok(bytes) => bytes.into_bytes(),
+            if !is_text {
+                println!("indexing (filename only): {key}");
+                writer
+                    .add_document(doc!(
+                        search_schema.key => key.as_str(),
+                        search_schema.size => size,
+                        search_schema.last_modified => last_modified.as_str(),
+                    ))
+                    .unwrap();
+                indexed_filename_only += 1;
+            } else {
+                println!("indexing: {key}");
+
+                let body = match s3_client
+                    .get_object()
+                    .bucket(&bucket_name)
+                    .key(&key)
+                    .send()
+                    .await
+                {
+                    Ok(output) => match output.body.collect().await {
+                        Ok(bytes) => bytes.into_bytes(),
+                        Err(e) => {
+                            eprintln!("warning: failed to read body for {key}: {e}");
+                            failed += 1;
+                            continue;
+                        }
+                    },
                     Err(e) => {
-                        eprintln!("warning: failed to read body for {key}: {e}");
+                        eprintln!("warning: failed to download {key}: {e}");
                         failed += 1;
                         continue;
                     }
-                },
-                Err(e) => {
-                    eprintln!("warning: failed to download {key}: {e}");
-                    failed += 1;
-                    continue;
+                };
+
+                let text = String::from_utf8(body.into()).ok();
+
+                if let Some(text) = &text {
+                    writer
+                        .add_document(doc!(
+                            search_schema.key => key.as_str(),
+                            search_schema.content => text.as_str(),
+                            search_schema.size => size,
+                            search_schema.last_modified => last_modified.as_str(),
+                        ))
+                        .unwrap();
+                    indexed += 1;
+                } else {
+                    println!("  non-utf8, indexing filename only");
+                    writer
+                        .add_document(doc!(
+                            search_schema.key => key.as_str(),
+                            search_schema.size => size,
+                            search_schema.last_modified => last_modified.as_str(),
+                        ))
+                        .unwrap();
+                    indexed_filename_only += 1;
                 }
-            };
+            }
 
-            let text = match String::from_utf8(body.into()) {
-                Ok(t) => t,
-                Err(_) => {
-                    skipped_non_utf8 += 1;
-                    continue;
-                }
-            };
-
-            writer
-                .add_document(doc!(
-                    search_schema.key => key.as_str(),
-                    search_schema.content => text.as_str(),
-                    search_schema.size => size,
-                    search_schema.last_modified => last_modified.as_str(),
-                ))
-                .unwrap();
-
-            indexed += 1;
-            if indexed % 100 == 0 {
+            let total_indexed = indexed + indexed_filename_only;
+            if total_indexed % 100 == 0 {
                 writer.commit().unwrap();
-                println!("progress: indexed {indexed} files...");
+                println!("progress: indexed {total_indexed} files...");
             }
         }
 
@@ -249,12 +260,11 @@ pub async fn run_indexer() {
     }
 
     writer.commit().unwrap();
-    let total = indexed + unchanged + skipped_non_text + skipped_non_utf8 + failed;
+    let total = indexed + indexed_filename_only + unchanged + failed;
     println!("\ndone: {total} files total");
-    println!("  indexed:          {indexed}");
-    println!("  unchanged:        {unchanged}");
-    println!("  removed:          {removed}");
-    println!("  skipped non-text: {skipped_non_text}");
-    println!("  skipped non-utf8: {skipped_non_utf8}");
-    println!("  failed:           {failed}");
+    println!("  indexed (full):       {indexed}");
+    println!("  indexed (filename):   {indexed_filename_only}");
+    println!("  unchanged:            {unchanged}");
+    println!("  removed:              {removed}");
+    println!("  failed:               {failed}");
 }
