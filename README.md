@@ -2,7 +2,30 @@
 
 Full-text search over S3 file contents, powered by Tantivy. Rust/Axum backend with an embedded React frontend.
 
-## Prerequisites
+## Install (pre-built binary)
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/andrewtheguy/fts-everywhere/main/install.sh | bash
+```
+
+Or with options:
+
+```bash
+# Install a specific release
+curl -fsSL https://raw.githubusercontent.com/andrewtheguy/fts-everywhere/main/install.sh | bash -s -- v0.1.0
+
+# Install latest prerelease
+curl -fsSL https://raw.githubusercontent.com/andrewtheguy/fts-everywhere/main/install.sh | bash -s -- --prerelease
+
+# Download to current directory without installing
+curl -fsSL https://raw.githubusercontent.com/andrewtheguy/fts-everywhere/main/install.sh | bash -s -- --download-only
+```
+
+Supported platforms: Linux (x86_64, arm64), macOS (arm64).
+
+## Building from source
+
+### Prerequisites
 
 ### Backend
 
