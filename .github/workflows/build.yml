@@ -77,13 +77,13 @@ jobs:
         run: cargo build --release --locked
 
       - name: Rename binary
-        run: mv target/release/fts-everywhere target/release/fts-everywhere-linux-${{ matrix.arch }}
+        run: mv target/release/minisearch target/release/minisearch-linux-${{ matrix.arch }}
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: fts-everywhere-linux-${{ matrix.arch }}
-          path: target/release/fts-everywhere-linux-${{ matrix.arch }}
+          name: minisearch-linux-${{ matrix.arch }}
+          path: target/release/minisearch-linux-${{ matrix.arch }}
 
   build-macos:
     needs: prepare
@@ -114,13 +114,13 @@ jobs:
         run: cargo build --release --locked
 
       - name: Rename binary
-        run: mv target/release/fts-everywhere target/release/fts-everywhere-macos-${{ matrix.arch }}
+        run: mv target/release/minisearch target/release/minisearch-macos-${{ matrix.arch }}
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: fts-everywhere-macos-${{ matrix.arch }}
-          path: target/release/fts-everywhere-macos-${{ matrix.arch }}
+          name: minisearch-macos-${{ matrix.arch }}
+          path: target/release/minisearch-macos-${{ matrix.arch }}
 
   release:
     needs: [prepare, build-linux, build-macos]

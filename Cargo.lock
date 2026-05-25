@@ -1244,27 +1244,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "42703706b716c37f96a77aea830392ad231f44c9e9a67872fa5548707e11b11c"
 
 [[package]]
-name = "fts-everywhere"
-version = "0.0.1"
-dependencies = [
- "anyhow",
- "aws-config",
- "aws-sdk-s3",
- "axum",
- "clap",
- "dotenvy",
- "new_mime_guess",
- "rust-embed",
- "serde",
- "serde_json",
- "tantivy",
- "tantivy-jieba",
- "thiserror",
- "tokio",
- "url",
-]
-
-[[package]]
 name = "futures-channel"
 version = "0.3.32"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2022,6 +2001,27 @@ name = "minimal-lexical"
 version = "0.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "68354c5c6bd36d73ff3feceb05efa59b6acb7626617f4962be322a825e61f79a"
+
+[[package]]
+name = "minisearch"
+version = "0.0.1"
+dependencies = [
+ "anyhow",
+ "aws-config",
+ "aws-sdk-s3",
+ "axum",
+ "clap",
+ "dotenvy",
+ "new_mime_guess",
+ "rust-embed",
+ "serde",
+ "serde_json",
+ "tantivy",
+ "tantivy-jieba",
+ "thiserror",
+ "tokio",
+ "url",
+]
 
 [[package]]
 name = "mio"

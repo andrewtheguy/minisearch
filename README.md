@@ -1,24 +1,24 @@
-# fts-everywhere
+# minisearch
 
 Full-text search over S3 file contents, powered by Tantivy. Rust/Axum backend with an embedded React frontend.
 
 ## Install (pre-built binary)
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/andrewtheguy/fts-everywhere/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/andrewtheguy/minisearch/main/install.sh | bash
 ```
 
 Or with options:
 
 ```bash
 # Install a specific release
-curl -fsSL https://raw.githubusercontent.com/andrewtheguy/fts-everywhere/main/install.sh | bash -s -- v0.1.0
+curl -fsSL https://raw.githubusercontent.com/andrewtheguy/minisearch/main/install.sh | bash -s -- v0.1.0
 
 # Install latest prerelease
-curl -fsSL https://raw.githubusercontent.com/andrewtheguy/fts-everywhere/main/install.sh | bash -s -- --prerelease
+curl -fsSL https://raw.githubusercontent.com/andrewtheguy/minisearch/main/install.sh | bash -s -- --prerelease
 
 # Download to current directory without installing
-curl -fsSL https://raw.githubusercontent.com/andrewtheguy/fts-everywhere/main/install.sh | bash -s -- --download-only
+curl -fsSL https://raw.githubusercontent.com/andrewtheguy/minisearch/main/install.sh | bash -s -- --download-only
 ```
 
 Supported platforms: Linux (x86_64, arm64), macOS (arm64).
@@ -103,7 +103,7 @@ cd ..
 cargo build --release   # embeds frontend/dist/ into the binary
 ```
 
-The resulting binary at `target/release/fts-everywhere` serves the SPA with no external files needed.
+The resulting binary at `target/release/minisearch` serves the SPA with no external files needed.
 
 ## API
 
