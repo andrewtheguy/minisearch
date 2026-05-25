@@ -123,9 +123,12 @@ pub async fn presign(
         .filter(|k| !k.trim().is_empty())
         .ok_or((StatusCode::BAD_REQUEST, "missing or empty query parameter 'key'".into()))?;
 
-    let content_type = mime_guess::from_path(&key)
-        .first_or_octet_stream()
-        .to_string();
+    let mime = mime_guess::from_path(&key).first_or_octet_stream();
+    let content_type = if mime.type_() == mime_guess::mime::TEXT {
+        format!("{mime}; charset=utf-8")
+    } else {
+        mime.to_string()
+    };
 
     let presign_config = PresigningConfig::expires_in(Duration::from_secs(3600))
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, format!("presign config error: {e}")))?;
