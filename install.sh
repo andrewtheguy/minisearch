@@ -1,7 +1,7 @@
 #!/bin/bash
 
-# fts-everywhere installer for Linux and Mac
-# Downloads latest binary from: https://github.com/andrewtheguy/fts-everywhere/releases
+# minisearch installer for Linux and Mac
+# Downloads latest binary from: https://github.com/andrewtheguy/minisearch/releases
 #
 # Usage: ./install.sh [RELEASE_TAG] [--prerelease]
 # Or set RELEASE_TAG environment variable
@@ -9,7 +9,7 @@
 set -e
 
 REPO_OWNER="andrewtheguy"
-REPO_NAME="fts-everywhere"
+REPO_NAME="minisearch"
 DOWNLOAD_ONLY=false
 PREFER_PRERELEASE=false
 
@@ -212,13 +212,13 @@ detect_arch() {
 get_binary_name() {
     case "${OS}-${ARCH}" in
         "linux-x86_64")
-            BINARY_NAME="fts-everywhere-linux-x86_64"
+            BINARY_NAME="minisearch-linux-x86_64"
             ;;
         "linux-arm64")
-            BINARY_NAME="fts-everywhere-linux-arm64"
+            BINARY_NAME="minisearch-linux-arm64"
             ;;
         "macos-arm64")
-            BINARY_NAME="fts-everywhere-macos-arm64"
+            BINARY_NAME="minisearch-macos-arm64"
             ;;
         *)
             print_error "Unsupported platform: ${OS}-${ARCH}"
@@ -335,7 +335,7 @@ download_and_install() {
     local temp_dir
     temp_dir=$(mktemp -d)
     local temp_binary="${temp_dir}/${BINARY_NAME}"
-    local final_path="$HOME/.local/bin/fts-everywhere"
+    local final_path="$HOME/.local/bin/minisearch"
 
     trap 'rm -rf "$temp_dir"' EXIT
 
@@ -371,7 +371,7 @@ download_and_install() {
 
         if [ -n "$profile" ]; then
             print_warn "${target_dir} is not in your current PATH, but is configured in your profile."
-            print_warn "To use fts-everywhere now, reload your profile:"
+            print_warn "To use minisearch now, reload your profile:"
             echo ""
             echo "    source $profile"
             echo ""
@@ -390,7 +390,7 @@ download_and_install() {
 show_usage() {
     echo "Usage: $0 [OPTIONS] [RELEASE_TAG]"
     echo ""
-    echo "Download and install fts-everywhere binary"
+    echo "Download and install minisearch binary"
     echo ""
     echo "Options:"
     echo "  --download-only  Download binary to current directory without installing"
@@ -412,9 +412,9 @@ show_usage() {
 
 install() {
     if [ "$DOWNLOAD_ONLY" = true ]; then
-        print_info "fts-everywhere downloader"
+        print_info "minisearch downloader"
     else
-        print_info "fts-everywhere installer"
+        print_info "minisearch installer"
     fi
     print_info "Release: ${RELEASE_TAG}"
     print_info "Repository: ${REPO_OWNER}/${REPO_NAME}"
@@ -447,7 +447,7 @@ install() {
     else
         download_and_install
         print_info "Installation completed successfully!"
-        print_info "You can now run 'fts-everywhere' from your terminal."
+        print_info "You can now run 'minisearch' from your terminal."
     fi
 }
 
@@ -461,9 +461,9 @@ main() {
     parse_args "$@"
 
     if [ "$DOWNLOAD_ONLY" = true ]; then
-        print_info "Starting fts-everywhere download..."
+        print_info "Starting minisearch download..."
     else
-        print_info "Starting fts-everywhere installation..."
+        print_info "Starting minisearch installation..."
         check_privileges
     fi
 
