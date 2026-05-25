@@ -26,20 +26,12 @@ async fn main() -> anyhow::Result<()> {
 
     match cli.command {
         Commands::Index { profile: profile_name } => {
-            let profiles_to_index: Vec<&config::ProfileConfig> = match &profile_name {
-                Some(name) => {
-                    let p = config
-                        .profiles
-                        .iter()
-                        .find(|p| p.name == *name)
-                        .with_context(|| format!("profile not found: {name}"))?;
-                    vec![p]
-                }
-                None => config.profiles.iter().collect(),
-            };
-            for profile in profiles_to_index {
-                indexer::run_indexer(profile).await?;
-            }
+            let profile = config
+                .profiles
+                .iter()
+                .find(|p| p.name == profile_name)
+                .with_context(|| format!("profile not found: {profile_name}"))?;
+            indexer::run_indexer(profile).await?;
         }
         Commands::Serve => {
             let mut profiles = Vec::new();

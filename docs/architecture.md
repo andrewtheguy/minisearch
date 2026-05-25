@@ -33,7 +33,7 @@ The application ships as a single binary. The React frontend is compiled and emb
 
 The binary has two subcommands:
 
-- **`index`** — Scans S3 buckets, downloads text files, and builds/updates the Tantivy index on disk. Accepts an optional `--profile` flag to index a specific profile; without it, all profiles are indexed sequentially.
+- **`index`** — Scans an S3 bucket, downloads text files, and builds/updates the Tantivy index on disk. Requires a `--profile` flag to specify which profile to index.
 - **`serve`** — Starts the Axum web server on port 52378, serving the API and embedded frontend.
 
 Configuration is loaded from a TOML file (`-c`/`--config` flag or `MINISEARCH_CONFIG` env var).

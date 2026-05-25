@@ -70,10 +70,7 @@ Profile names must be unique and contain only lowercase letters, digits, hyphens
 The binary has two subcommands:
 
 ```bash
-# Build the search index (all profiles)
-minisearch -c config.toml index
-
-# Build the search index (specific profile)
+# Build the search index for a profile
 minisearch -c config.toml index --profile my-bucket
 
 # Start the web server (port 52378)

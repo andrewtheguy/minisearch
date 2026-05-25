@@ -18,8 +18,8 @@ pub enum Commands {
     Serve,
     /// Index S3 bucket contents into Tantivy
     Index {
-        /// Profile name to index (indexes all profiles if not specified)
+        /// Profile name to index
         #[arg(short, long)]
-        profile: Option<String>,
+        profile: String,
     },
 }
