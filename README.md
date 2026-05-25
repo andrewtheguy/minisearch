@@ -55,17 +55,17 @@ You can also use `bacon` for auto-rebuilding the backend on file changes.
 
 ## Production
 
-Build the frontend and run the backend:
+Frontend assets are embedded into the Rust binary at compile time via `rust-embed`, producing a single self-contained executable.
 
 ```bash
 cd frontend
-bun run build    # outputs to frontend/dist/
+bun run build           # outputs to frontend/dist/
 
 cd ..
-cargo run        # serves the SPA from frontend/dist/
+cargo build --release   # embeds frontend/dist/ into the binary
 ```
 
-Open http://localhost:3000.
+The resulting binary at `target/release/fts-everywhere` serves the SPA with no external files needed.
 
 ## API
 

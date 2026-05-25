@@ -1,6 +1,16 @@
-use axum::{extract::State, http::StatusCode, routing::get, Json, Router};
+use axum::{
+    extract::State,
+    http::{StatusCode, header},
+    response::{Html, IntoResponse, Response},
+    routing::get,
+    Json, Router,
+};
+use rust_embed::Embed;
 use serde::Serialize;
-use tower_http::services::{ServeDir, ServeFile};
+
+#[derive(Embed)]
+#[folder = "frontend/dist/"]
+struct Assets;
 
 #[derive(Clone)]
 struct AppState {
@@ -50,6 +60,18 @@ async fn list_files(
     Ok(Json(ListFilesResponse { files }))
 }
 
+async fn static_handler(uri: axum::http::Uri) -> Response {
+    let path = uri.path().trim_start_matches('/');
+    if let Some(file) = Assets::get(path) {
+        let mime = mime_guess::from_path(path).first_or_octet_stream();
+        ([(header::CONTENT_TYPE, mime.as_ref())], file.data).into_response()
+    } else if let Some(index) = Assets::get("index.html") {
+        Html(index.data).into_response()
+    } else {
+        StatusCode::NOT_FOUND.into_response()
+    }
+}
+
 #[tokio::main]
 async fn main() {
     dotenvy::dotenv().ok();
@@ -68,10 +90,7 @@ async fn main() {
         .route("/api/health", get(|| async { "ok" }))
         .route("/files", get(list_files))
         .with_state(state)
-        .fallback_service(
-            ServeDir::new("frontend/dist")
-                .fallback(ServeFile::new("frontend/dist/index.html")),
-        );
+        .fallback(static_handler);
 
     let listener = tokio::net::TcpListener::bind("0.0.0.0:3000").await.unwrap();
     println!("listening on http://localhost:3000");
