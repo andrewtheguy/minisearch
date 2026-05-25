@@ -1,5 +1,6 @@
 use axum::{extract::State, http::StatusCode, routing::get, Json, Router};
 use serde::Serialize;
+use tower_http::services::{ServeDir, ServeFile};
 
 #[derive(Clone)]
 struct AppState {
@@ -64,9 +65,13 @@ async fn main() {
     };
 
     let app = Router::new()
-        .route("/", get(|| async { "ok" }))
+        .route("/api/health", get(|| async { "ok" }))
         .route("/files", get(list_files))
-        .with_state(state);
+        .with_state(state)
+        .fallback_service(
+            ServeDir::new("frontend/dist")
+                .fallback(ServeFile::new("frontend/dist/index.html")),
+        );
 
     let listener = tokio::net::TcpListener::bind("0.0.0.0:3000").await.unwrap();
     println!("listening on http://localhost:3000");
