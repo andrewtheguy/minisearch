@@ -3,8 +3,17 @@ work_dir = "./workdir"
 [[profiles]]
 name = "my-bucket"
 description = "My S3 bucket files"
+backend = "s3"
 aws_access_key_id = "your-access-key"
 aws_secret_access_key = "your-secret-key"
 aws_region = "us-east-1"
 aws_endpoint_url = "https://your-s3-endpoint.example.com"
 s3_bucket_name = "your-bucket"
+
+[[profiles]]
+name = "my-webdav"
+description = "My WebDAV server"
+backend = "webdav"
+webdav_url = "https://dav.example.com/remote.php/dav/files/user/"
+webdav_username = "user"
+webdav_password = "pass"

@@ -1,4 +1,5 @@
 mod assets;
+mod backend;
 mod cli;
 mod config;
 mod error;
@@ -6,6 +7,7 @@ mod handlers;
 mod indexer;
 mod search;
 mod state;
+mod webdav;
 
 use std::sync::{Arc, RwLock};
 
@@ -31,12 +33,13 @@ async fn main() -> anyhow::Result<()> {
                 .find(|p| p.name == profile_name)
                 .with_context(|| format!("profile not found: {profile_name}"))?;
             let work_dir = config.profile_work_dir(&profile_name);
-            indexer::run_indexer(profile, &work_dir).await?;
+            let backend = profile.build_backend().await?;
+            indexer::run_indexer(profile, &backend, &work_dir).await?;
             if let Some(interval) = every {
                 loop {
                     info!("next index run in {}s", interval.as_secs());
                     tokio::time::sleep(interval).await;
-                    if let Err(e) = indexer::run_indexer(profile, &work_dir).await {
+                    if let Err(e) = indexer::run_indexer(profile, &backend, &work_dir).await {
                         error!("indexer error: {e:#}");
                     }
                 }
@@ -64,6 +67,7 @@ async fn main() -> anyhow::Result<()> {
 
                 println!("profile:      {}", profile.name);
                 println!("description:  {}", profile.description);
+                println!("backend:      {}", profile.backend);
                 println!("index:        {}", if index_exists { "exists" } else { "not found" });
                 println!("last indexed: {last_indexed}");
                 println!();
@@ -76,18 +80,13 @@ async fn main() -> anyhow::Result<()> {
                 .find(|p| p.name == profile_name)
                 .with_context(|| format!("profile not found: {profile_name}"))?;
 
-            let s3_client = profile_config.s3_client().await;
+            let backend = profile_config.build_backend().await?;
             let work_dir = config.profile_work_dir(&profile_name);
             let index_path = work_dir.join(config::INDEX_DIR);
 
-            s3_client
-                .list_objects_v2()
-                .bucket(&profile_config.s3_bucket_name)
-                .max_keys(1)
-                .send()
-                .await
-                .with_context(|| format!("failed to connect to S3 bucket '{}'", profile_config.s3_bucket_name))?;
-            info!("S3 connectivity verified for bucket '{}'", profile_config.s3_bucket_name);
+            backend.check_connectivity().await
+                .with_context(|| format!("failed to verify {} connectivity", profile_config.backend))?;
+            info!("{} connectivity verified", profile_config.backend);
 
             let index_state = state::read_state(&work_dir).await
                 .ok_or_else(|| anyhow::anyhow!("state.json not found or not parseable at {work_dir:?} — run `minisearch index --profile {profile_name}` first"))?;
@@ -105,8 +104,7 @@ async fn main() -> anyhow::Result<()> {
                     name: profile_config.name.clone(),
                     description: profile_config.description.clone(),
                     state: ProfileState {
-                        s3_client,
-                        bucket_name: profile_config.s3_bucket_name.clone(),
+                        backend,
                         work_dir,
                         search,
                     },
@@ -115,6 +113,7 @@ async fn main() -> anyhow::Result<()> {
 
             let app = Router::new()
                 .route("/", get(handlers::redirect_to_profile))
+                .route("/api/default-profile", get(handlers::default_profile))
                 .route("/api/health", get(|| async { "ok" }))
                 .route("/api/p/{profile}/info", get(handlers::profile_info))
                 .route("/api/p/{profile}/search", get(handlers::search))

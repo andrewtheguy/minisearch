@@ -6,33 +6,97 @@ pub const INDEX_DIR: &str = "tantivy_index";
 use anyhow::{bail, Context};
 use aws_sdk_s3::config::Credentials;
 
+use crate::backend::Backend;
+use crate::webdav::WebDavClient;
+
+#[derive(Debug, serde::Deserialize, Clone, PartialEq)]
+#[serde(rename_all = "lowercase")]
+pub enum BackendType {
+    S3,
+    Webdav,
+}
+
+impl std::fmt::Display for BackendType {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            BackendType::S3 => write!(f, "s3"),
+            BackendType::Webdav => write!(f, "webdav"),
+        }
+    }
+}
+
 #[derive(serde::Deserialize, Clone)]
 pub struct ProfileConfig {
     pub name: String,
     pub description: String,
-    pub aws_access_key_id: String,
-    pub aws_secret_access_key: String,
-    pub aws_region: String,
-    pub aws_endpoint_url: String,
-    pub s3_bucket_name: String,
+    pub backend: BackendType,
+    pub aws_access_key_id: Option<String>,
+    pub aws_secret_access_key: Option<String>,
+    pub aws_region: Option<String>,
+    pub aws_endpoint_url: Option<String>,
+    pub s3_bucket_name: Option<String>,
+    pub webdav_url: Option<String>,
+    pub webdav_username: Option<String>,
+    pub webdav_password: Option<String>,
 }
 
 impl ProfileConfig {
-    pub async fn s3_client(&self) -> aws_sdk_s3::Client {
-        let creds = Credentials::new(
-            &self.aws_access_key_id,
-            &self.aws_secret_access_key,
-            None,
-            None,
-            "toml-config",
-        );
-        let config = aws_config::defaults(aws_config::BehaviorVersion::latest())
-            .credentials_provider(creds)
-            .region(aws_config::Region::new(self.aws_region.clone()))
-            .endpoint_url(&self.aws_endpoint_url)
-            .load()
-            .await;
-        aws_sdk_s3::Client::new(&config)
+    pub async fn build_backend(&self) -> anyhow::Result<Backend> {
+        match self.backend {
+            BackendType::S3 => {
+                let access_key = self
+                    .aws_access_key_id
+                    .as_deref()
+                    .context("aws_access_key_id required for s3 backend")?;
+                let secret_key = self
+                    .aws_secret_access_key
+                    .as_deref()
+                    .context("aws_secret_access_key required for s3 backend")?;
+                let region = self
+                    .aws_region
+                    .as_deref()
+                    .context("aws_region required for s3 backend")?;
+                let endpoint = self
+                    .aws_endpoint_url
+                    .as_deref()
+                    .context("aws_endpoint_url required for s3 backend")?;
+                let bucket = self
+                    .s3_bucket_name
+                    .as_deref()
+                    .context("s3_bucket_name required for s3 backend")?;
+
+                let creds = Credentials::new(access_key, secret_key, None, None, "toml-config");
+                let config = aws_config::defaults(aws_config::BehaviorVersion::latest())
+                    .credentials_provider(creds)
+                    .region(aws_config::Region::new(region.to_string()))
+                    .endpoint_url(endpoint)
+                    .load()
+                    .await;
+                let client = aws_sdk_s3::Client::new(&config);
+
+                Ok(Backend::S3 {
+                    client,
+                    bucket: bucket.to_string(),
+                })
+            }
+            BackendType::Webdav => {
+                let url = self
+                    .webdav_url
+                    .as_deref()
+                    .context("webdav_url required for webdav backend")?;
+                let username = self
+                    .webdav_username
+                    .as_deref()
+                    .context("webdav_username required for webdav backend")?;
+                let password = self
+                    .webdav_password
+                    .as_deref()
+                    .context("webdav_password required for webdav backend")?;
+
+                let client = WebDavClient::new(url, username, password)?;
+                Ok(Backend::WebDav(client))
+            }
+        }
     }
 }
 
@@ -49,7 +113,8 @@ impl AppConfig {
     }
 
     pub async fn load(path: &Path) -> anyhow::Result<Self> {
-        let contents = tokio::fs::read_to_string(path).await
+        let contents = tokio::fs::read_to_string(path)
+            .await
             .with_context(|| format!("failed to read config file: {}", path.display()))?;
         Self::from_toml_str(&contents)
             .with_context(|| format!("failed to load config file: {}", path.display()))
@@ -91,6 +156,39 @@ impl AppConfig {
             if !seen.insert(&profile.name) {
                 bail!("duplicate profile name: '{}'", profile.name);
             }
+
+            match profile.backend {
+                BackendType::S3 => {
+                    for (field, value) in [
+                        ("aws_access_key_id", &profile.aws_access_key_id),
+                        ("aws_secret_access_key", &profile.aws_secret_access_key),
+                        ("aws_region", &profile.aws_region),
+                        ("aws_endpoint_url", &profile.aws_endpoint_url),
+                        ("s3_bucket_name", &profile.s3_bucket_name),
+                    ] {
+                        if value.is_none() {
+                            bail!(
+                                "profile '{}': {field} is required for s3 backend",
+                                profile.name
+                            );
+                        }
+                    }
+                }
+                BackendType::Webdav => {
+                    for (field, value) in [
+                        ("webdav_url", &profile.webdav_url),
+                        ("webdav_username", &profile.webdav_username),
+                        ("webdav_password", &profile.webdav_password),
+                    ] {
+                        if value.is_none() {
+                            bail!(
+                                "profile '{}': {field} is required for webdav backend",
+                                profile.name
+                            );
+                        }
+                    }
+                }
+            }
         }
 
         Ok(())
@@ -101,17 +199,32 @@ impl AppConfig {
 mod tests {
     use super::*;
 
-    fn profile_toml(name: &str) -> String {
+    fn s3_profile_toml(name: &str) -> String {
         format!(
             r#"
 [[profiles]]
 name = "{name}"
 description = "Test profile"
+backend = "s3"
 aws_access_key_id = "access"
 aws_secret_access_key = "secret"
 aws_region = "us-east-1"
 aws_endpoint_url = "http://localhost:9000"
 s3_bucket_name = "bucket"
+"#
+        )
+    }
+
+    fn webdav_profile_toml(name: &str) -> String {
+        format!(
+            r#"
+[[profiles]]
+name = "{name}"
+description = "Test WebDAV profile"
+backend = "webdav"
+webdav_url = "https://dav.example.com/files/"
+webdav_username = "user"
+webdav_password = "pass"
 "#
         )
     }
@@ -128,23 +241,37 @@ s3_bucket_name = "bucket"
     }
 
     #[test]
-    fn parses_valid_profiles() {
+    fn parses_s3_profile() {
+        let config = AppConfig::from_toml_str(&config_toml(&s3_profile_toml("docs"))).unwrap();
+        assert_eq!(config.profiles.len(), 1);
+        assert_eq!(config.profiles[0].name, "docs");
+        assert_eq!(config.profiles[0].backend, BackendType::S3);
+    }
+
+    #[test]
+    fn parses_webdav_profile() {
+        let config =
+            AppConfig::from_toml_str(&config_toml(&webdav_profile_toml("mydav"))).unwrap();
+        assert_eq!(config.profiles.len(), 1);
+        assert_eq!(config.profiles[0].name, "mydav");
+        assert_eq!(config.profiles[0].backend, BackendType::Webdav);
+    }
+
+    #[test]
+    fn parses_mixed_profiles() {
         let config = AppConfig::from_toml_str(&config_toml(&format!(
             "{}{}",
-            profile_toml("docs"),
-            profile_toml("media_2026")
+            s3_profile_toml("docs"),
+            webdav_profile_toml("mydav")
         )))
         .unwrap();
-
         assert_eq!(config.profiles.len(), 2);
-        assert_eq!(config.profiles[0].name, "docs");
-        assert_eq!(config.profiles[1].name, "media_2026");
     }
 
     #[test]
     fn derives_profile_work_dir() {
-        let config = AppConfig::from_toml_str(&config_toml(&profile_toml("docs"))).unwrap();
-
+        let config =
+            AppConfig::from_toml_str(&config_toml(&s3_profile_toml("docs"))).unwrap();
         assert_eq!(
             config.profile_work_dir("docs"),
             PathBuf::from("tmp/test-workdir/docs")
@@ -153,22 +280,22 @@ s3_bucket_name = "bucket"
 
     #[test]
     fn rejects_config_without_work_dir() {
-        let err = parse_error(&profile_toml("docs"));
-
-        assert!(err.contains("work_dir"), "expected work_dir error, got: {err}");
+        let err = parse_error(&s3_profile_toml("docs"));
+        assert!(
+            err.contains("work_dir"),
+            "expected work_dir error, got: {err}"
+        );
     }
 
     #[test]
     fn rejects_empty_work_dir() {
-        let err = parse_error(&format!("work_dir = \"\"\n{}", profile_toml("docs")));
-
+        let err = parse_error(&format!("work_dir = \"\"\n{}", s3_profile_toml("docs")));
         assert_eq!(err, "work_dir must not be empty");
     }
 
     #[test]
     fn rejects_config_without_profiles() {
         let err = parse_error("work_dir = \"tmp/workdir\"");
-
         assert_eq!(
             err,
             "config must contain at least one [[profiles]] entry"
@@ -177,15 +304,13 @@ s3_bucket_name = "bucket"
 
     #[test]
     fn rejects_empty_profile_name() {
-        let err = parse_error(&config_toml(&profile_toml("")));
-
+        let err = parse_error(&config_toml(&s3_profile_toml("")));
         assert_eq!(err, "profile name must not be empty");
     }
 
     #[test]
     fn rejects_invalid_profile_name() {
-        let err = parse_error(&config_toml(&profile_toml("Docs")));
-
+        let err = parse_error(&config_toml(&s3_profile_toml("Docs")));
         assert_eq!(
             err,
             "profile name 'Docs' must contain only lowercase letters, digits, hyphens, and underscores"
@@ -196,11 +321,36 @@ s3_bucket_name = "bucket"
     fn rejects_duplicate_profile_names() {
         let contents = config_toml(&format!(
             "{}{}",
-            profile_toml("docs"),
-            profile_toml("docs")
+            s3_profile_toml("docs"),
+            s3_profile_toml("docs")
         ));
         let err = parse_error(&contents);
-
         assert_eq!(err, "duplicate profile name: 'docs'");
+    }
+
+    #[test]
+    fn rejects_s3_missing_fields() {
+        let toml = r#"
+work_dir = "tmp/workdir"
+[[profiles]]
+name = "bad"
+description = "missing s3 fields"
+backend = "s3"
+"#;
+        let err = parse_error(toml);
+        assert!(err.contains("aws_access_key_id is required for s3 backend"));
+    }
+
+    #[test]
+    fn rejects_webdav_missing_fields() {
+        let toml = r#"
+work_dir = "tmp/workdir"
+[[profiles]]
+name = "bad"
+description = "missing webdav fields"
+backend = "webdav"
+"#;
+        let err = parse_error(toml);
+        assert!(err.contains("webdav_url is required for webdav backend"));
     }
 }

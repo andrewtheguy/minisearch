@@ -1,6 +1,6 @@
 # minisearch
 
-Full-text search and browsing for S3 file contents, powered by Tantivy. Rust/Axum backend with an embedded React frontend. Supports multiple named profiles, each pointing to a different S3 bucket with its own search index.
+Full-text search and browsing for S3 and WebDAV file contents, powered by Tantivy. Rust/Axum backend with an embedded React frontend. Supports multiple named profiles, each pointing to a different S3 bucket or WebDAV server with its own search index.
 
 ## Install (pre-built binary)
 
@@ -51,22 +51,35 @@ bun install
 
 By default, minisearch looks for its config at `~/.config/minisearch/config.toml` (or `$XDG_CONFIG_HOME/minisearch/config.toml`). Override with `-c`/`--config` or the `MINISEARCH_CONFIG` env var.
 
-Create a TOML config file with one or more `[[profiles]]` entries. Each profile defines a name, description, S3 connection details, and a working directory:
+Create a TOML config file with one or more `[[profiles]]` entries. Each profile defines a name, description, backend type (`s3` or `webdav`), connection details, and a working directory:
 
 ```toml
 work_dir = "./workdir"
 
+# S3 backend
 [[profiles]]
 name = "my-bucket"
 description = "My S3 bucket files"
+backend = "s3"
 aws_access_key_id = "your-access-key"
 aws_secret_access_key = "your-secret-key"
 aws_region = "us-east-1"
 aws_endpoint_url = "https://your-s3-endpoint.example.com"
 s3_bucket_name = "your-bucket"
+
+# WebDAV backend
+[[profiles]]
+name = "my-webdav"
+description = "My WebDAV server"
+backend = "webdav"
+webdav_url = "https://dav.example.com/remote.php/dav/files/user/"
+webdav_username = "user"
+webdav_password = "pass"
 ```
 
 Profile names must be unique and contain only lowercase letters, digits, hyphens, and underscores. The top-level `work_dir` is the base working directory — each profile's data is stored under `<work_dir>/<profile_name>/`, with the Tantivy search index at `<work_dir>/<profile_name>/tantivy_index/` and indexer state at `<work_dir>/<profile_name>/state.json`.
+
+WebDAV profiles do not support presigned URLs, so file links in the MiniSearch UI are not clickable for WebDAV backends.
 
 ## Usage
 
@@ -86,7 +99,7 @@ minisearch serve --profile my-bucket
 minisearch -c /path/to/config.toml serve --profile my-bucket
 ```
 
-Run `index` first to download and index all files from the S3 bucket, then `serve` to start the web UI. The server validates S3 connectivity and the search index on startup — if either is unavailable, it fails immediately with a clear error. The home page redirects to `/p/<profile>/browse/` which shows an S3 folder browser with full-text search scoped to the current folder.
+Run `index` first to download and index all files from the backend, then `serve` to start the web UI. The server validates backend connectivity and the search index on startup — if either is unavailable, it fails immediately with a clear error. The home page redirects to `/p/<profile>/browse/` which shows a folder browser with full-text search scoped to the current folder.
 
 The server binds to localhost only (`127.0.0.1` and `[::1]`) and is not accessible from other machines. Use `--port` to change the port (default: 52378). To expose it externally, put it behind a reverse proxy.
 
@@ -123,7 +136,7 @@ The resulting binary at `target/release/minisearch` serves the SPA with no exter
 
 ## Guides
 
-- [S3 Gateway Setup](docs/s3-gateway-setup.md) — use MiniSearch with a local filesystem via an S3 gateway (VersityGW, rclone)
+- [Gateway Setup](docs/gateway-setup.md) — use MiniSearch with a local filesystem or cloud drive via a gateway (rclone, VersityGW)
 
 ## Frontend Tooling
 

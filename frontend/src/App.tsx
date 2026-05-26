@@ -117,6 +117,7 @@ function BrowseView({ profileName, prefix }: { profileName: string; prefix: stri
   const [searchParams, setSearchParams] = useSearchParams();
   const [profileDescription, setProfileDescription] = useState<string>("");
   const [lastIndexed, setLastIndexed] = useState<string>("");
+  const [supportsPresign, setSupportsPresign] = useState<boolean>(false);
 
   const [folders, setFolders] = useState<BrowseFolder[]>([]);
   const [files, setFiles] = useState<BrowseFile[]>([]);
@@ -205,13 +206,19 @@ function BrowseView({ profileName, prefix }: { profileName: string; prefix: stri
     fetch(`/api/p/${profileName}/info`, { signal: controller.signal })
       .then((res) =>
         res.ok
-          ? (res.json() as Promise<{ name: string; description: string; last_indexed: string }>)
+          ? (res.json() as Promise<{
+              name: string;
+              description: string;
+              last_indexed: string;
+              supports_presign: boolean;
+            }>)
           : null,
       )
       .then((data) => {
         if (data) {
           setProfileDescription(data.description);
           setLastIndexed(data.last_indexed);
+          setSupportsPresign(data.supports_presign);
         }
       })
       .catch((err) => {
@@ -437,14 +444,18 @@ function BrowseView({ profileName, prefix }: { profileName: string; prefix: stri
               {searchResults.map((result) => (
                 <Card key={result.key}>
                   <CardContent>
-                    <a
-                      className="text-primary font-semibold hover:underline block mb-1"
-                      href={`/api/p/${profileName}/presign?key=${encodeURIComponent(result.key)}`}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                    >
-                      {result.key}
-                    </a>
+                    {supportsPresign ? (
+                      <a
+                        className="text-primary font-semibold hover:underline block mb-1"
+                        href={`/api/p/${profileName}/presign?key=${encodeURIComponent(result.key)}`}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                      >
+                        {result.key}
+                      </a>
+                    ) : (
+                      <span className="font-semibold block mb-1">{result.key}</span>
+                    )}
                     <p className="text-sm text-muted-foreground mb-2">
                       {formatBytes(result.size)} &middot;{" "}
                       {new Date(result.last_modified).toLocaleString()}
@@ -590,24 +601,40 @@ function BrowseView({ profileName, prefix }: { profileName: string; prefix: stri
 
               {files.length > 0 && (
                 <div className="space-y-1">
-                  {files.map((file) => (
-                    <a
-                      key={file.key}
-                      className="w-full text-left px-3 py-2 rounded-md hover:bg-accent transition-colors flex items-center gap-2"
-                      href={`/api/p/${profileName}/presign?key=${encodeURIComponent(file.key)}`}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                    >
-                      <span className="text-muted-foreground">&#128196;</span>
-                      <span className="flex-1 font-medium">{file.name}</span>
-                      <span className="text-sm text-muted-foreground">
-                        {formatBytes(file.size)}
-                      </span>
-                      <span className="text-sm text-muted-foreground">
-                        {file.last_modified ? new Date(file.last_modified).toLocaleString() : ""}
-                      </span>
-                    </a>
-                  ))}
+                  {files.map((file) =>
+                    supportsPresign ? (
+                      <a
+                        key={file.key}
+                        className="w-full text-left px-3 py-2 rounded-md hover:bg-accent transition-colors flex items-center gap-2"
+                        href={`/api/p/${profileName}/presign?key=${encodeURIComponent(file.key)}`}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                      >
+                        <span className="text-muted-foreground">&#128196;</span>
+                        <span className="flex-1 font-medium">{file.name}</span>
+                        <span className="text-sm text-muted-foreground">
+                          {formatBytes(file.size)}
+                        </span>
+                        <span className="text-sm text-muted-foreground">
+                          {file.last_modified ? new Date(file.last_modified).toLocaleString() : ""}
+                        </span>
+                      </a>
+                    ) : (
+                      <div
+                        key={file.key}
+                        className="w-full text-left px-3 py-2 rounded-md flex items-center gap-2"
+                      >
+                        <span className="text-muted-foreground">&#128196;</span>
+                        <span className="flex-1 font-medium">{file.name}</span>
+                        <span className="text-sm text-muted-foreground">
+                          {formatBytes(file.size)}
+                        </span>
+                        <span className="text-sm text-muted-foreground">
+                          {file.last_modified ? new Date(file.last_modified).toLocaleString() : ""}
+                        </span>
+                      </div>
+                    ),
+                  )}
                 </div>
               )}
 
@@ -644,12 +671,64 @@ function BrowseView({ profileName, prefix }: { profileName: string; prefix: stri
   );
 }
 
+function RootRedirect() {
+  const navigate = useNavigate();
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  const doFetch = useCallback(() => {
+    setLoading(true);
+    setError(null);
+    fetch("/api/default-profile")
+      .then((res) => {
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        return res.json() as Promise<{ name: string }>;
+      })
+      .then((data) => {
+        navigate(`/p/${data.name}/browse/`, { replace: true });
+      })
+      .catch((err) => {
+        setError(err instanceof Error ? err.message : String(err));
+        setLoading(false);
+      });
+  }, [navigate]);
+
+  useEffect(() => {
+    doFetch();
+  }, [doFetch]);
+
+  if (error) {
+    return (
+      <div className="flex flex-col items-center justify-center min-h-screen gap-4">
+        <p className="text-red-600">Failed to load profile: {error}</p>
+        <button
+          type="button"
+          className="px-4 py-2 text-sm bg-gray-100 hover:bg-gray-200 rounded"
+          onClick={doFetch}
+        >
+          Retry
+        </button>
+      </div>
+    );
+  }
+
+  if (loading) {
+    return (
+      <div className="flex items-center justify-center min-h-screen">
+        <p className="text-gray-500">Loading...</p>
+      </div>
+    );
+  }
+
+  return null;
+}
+
 function App() {
   return (
     <Routes>
       <Route path="/p/:profileName" element={<Navigate to="browse/" replace />} />
       <Route path="/p/:profileName/browse/*" element={<BrowseViewGuard />} />
-      <Route path="*" element={<Navigate to="/" replace />} />
+      <Route path="*" element={<RootRedirect />} />
     </Routes>
   );
 }

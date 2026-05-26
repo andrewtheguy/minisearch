@@ -3,12 +3,14 @@ use std::sync::{Arc, RwLock};
 
 use tantivy::IndexReader;
 
+use crate::backend::Backend;
 use crate::search::SearchSchema;
 
 #[derive(serde::Deserialize)]
 pub struct IndexState {
     pub last_indexed: String,
     pub bucket_id: Option<String>,
+    pub backend: Option<String>,
 }
 
 pub async fn read_state(work_dir: &Path) -> Option<IndexState> {
@@ -43,8 +45,7 @@ pub struct ProfileEntry {
 
 #[derive(Clone)]
 pub struct ProfileState {
-    pub s3_client: aws_sdk_s3::Client,
-    pub bucket_name: String,
+    pub backend: Backend,
     pub work_dir: PathBuf,
     pub search: Arc<RwLock<SearchState>>,
 }

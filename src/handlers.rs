@@ -1,9 +1,7 @@
 use std::collections::BTreeSet;
 use std::ops::Range;
-use std::time::Duration;
 
 use anyhow::Context;
-use aws_sdk_s3::presigning::PresigningConfig;
 use axum::extract::{Path, Query, State};
 use axum::Json;
 use serde::{Deserialize, Serialize};
@@ -79,11 +77,18 @@ pub async fn redirect_to_profile(
     axum::response::Redirect::temporary(&format!("/p/{}/browse/", state.profile.name))
 }
 
+pub async fn default_profile(
+    State(state): State<AppState>,
+) -> Json<serde_json::Value> {
+    Json(serde_json::json!({ "name": state.profile.name }))
+}
+
 #[derive(Serialize)]
 pub struct ProfileInfoResponse {
     pub name: String,
     pub description: String,
     pub last_indexed: String,
+    pub supports_presign: bool,
 }
 
 pub async fn profile_info(
@@ -98,6 +103,7 @@ pub async fn profile_info(
         name: profile.name.clone(),
         description: profile.description.clone(),
         last_indexed,
+        supports_presign: profile.state.backend.supports_presign(),
     }))
 }
 
@@ -405,6 +411,105 @@ fn snippet_segments(fragment: &str, ranges: &[Range<usize>]) -> Vec<SearchSnippe
     segments
 }
 
+#[derive(Deserialize)]
+pub struct PresignParams {
+    pub key: Option<String>,
+}
+
+pub async fn presign(
+    State(state): State<AppState>,
+    Path(profile_name): Path<String>,
+    Query(params): Query<PresignParams>,
+) -> Result<axum::response::Redirect, AppError> {
+    let profile = get_profile(&state, &profile_name)?;
+
+    let key = params
+        .key
+        .filter(|k| !k.trim().is_empty())
+        .ok_or_else(|| AppError::bad_request("missing or empty query parameter 'key'"))?;
+
+    let url = profile
+        .state
+        .backend
+        .presign_url(&key)
+        .await
+        .context("presign failed")?
+        .ok_or_else(|| AppError::bad_request("presigned URLs are not supported for this backend"))?;
+
+    Ok(axum::response::Redirect::temporary(&url))
+}
+
+#[derive(Deserialize)]
+pub struct BrowseParams {
+    pub prefix: Option<String>,
+    pub continuation_token: Option<String>,
+}
+
+#[derive(Serialize)]
+pub struct BrowseResponse {
+    pub prefix: String,
+    pub folders: Vec<BrowseFolderResponse>,
+    pub files: Vec<BrowseFileResponse>,
+    pub is_truncated: bool,
+    pub next_continuation_token: Option<String>,
+}
+
+#[derive(Serialize)]
+pub struct BrowseFolderResponse {
+    pub key: String,
+    pub name: String,
+}
+
+#[derive(Serialize)]
+pub struct BrowseFileResponse {
+    pub key: String,
+    pub name: String,
+    pub size: u64,
+    pub last_modified: String,
+}
+
+pub async fn browse(
+    State(state): State<AppState>,
+    Path(profile_name): Path<String>,
+    Query(params): Query<BrowseParams>,
+) -> Result<Json<BrowseResponse>, AppError> {
+    let profile = get_profile(&state, &profile_name)?;
+
+    let prefix = params.prefix.unwrap_or_default();
+    let continuation_token = params.continuation_token.as_deref();
+
+    let output = profile
+        .state
+        .backend
+        .browse(&prefix, continuation_token)
+        .await
+        .context("failed to browse")?;
+
+    Ok(Json(BrowseResponse {
+        prefix: output.prefix,
+        folders: output
+            .folders
+            .into_iter()
+            .map(|f| BrowseFolderResponse {
+                key: f.key,
+                name: f.name,
+            })
+            .collect(),
+        files: output
+            .files
+            .into_iter()
+            .map(|f| BrowseFileResponse {
+                key: f.key,
+                name: f.name,
+                size: f.size,
+                last_modified: f.last_modified,
+            })
+            .collect(),
+        is_truncated: output.is_truncated,
+        next_continuation_token: output.next_continuation_token,
+    }))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -475,145 +580,4 @@ mod tests {
         let mime = new_mime_guess::from_path("test.m4a").first_or_octet_stream();
         assert_eq!(mime, "audio/mp4");
     }
-}
-
-#[derive(Deserialize)]
-pub struct PresignParams {
-    pub key: Option<String>,
-}
-
-pub async fn presign(
-    State(state): State<AppState>,
-    Path(profile_name): Path<String>,
-    Query(params): Query<PresignParams>,
-) -> Result<axum::response::Redirect, AppError> {
-    let profile = get_profile(&state, &profile_name)?;
-
-    let key = params
-        .key
-        .filter(|k| !k.trim().is_empty())
-        .ok_or_else(|| AppError::bad_request("missing or empty query parameter 'key'"))?;
-
-    let mime = new_mime_guess::from_path(&key).first_or_octet_stream();
-    let content_type = if mime.type_() == "text" {
-        format!("{mime}; charset=utf-8")
-    } else {
-        mime.to_string()
-    };
-
-    let presign_config = PresigningConfig::expires_in(Duration::from_secs(3600))
-        .context("presign config error")?;
-
-    let presigned = profile
-        .state
-        .s3_client
-        .get_object()
-        .bucket(&profile.state.bucket_name)
-        .key(&key)
-        .response_content_type(&content_type)
-        .response_content_disposition("inline")
-        .presigned(presign_config)
-        .await
-        .context("presign failed")?;
-
-    Ok(axum::response::Redirect::temporary(presigned.uri()))
-}
-
-#[derive(Deserialize)]
-pub struct BrowseParams {
-    pub prefix: Option<String>,
-    pub continuation_token: Option<String>,
-}
-
-#[derive(Serialize)]
-pub struct BrowseResponse {
-    pub prefix: String,
-    pub folders: Vec<BrowseFolder>,
-    pub files: Vec<BrowseFile>,
-    pub is_truncated: bool,
-    pub next_continuation_token: Option<String>,
-}
-
-#[derive(Serialize)]
-pub struct BrowseFolder {
-    pub key: String,
-    pub name: String,
-}
-
-#[derive(Serialize)]
-pub struct BrowseFile {
-    pub key: String,
-    pub name: String,
-    pub size: u64,
-    pub last_modified: String,
-}
-
-pub async fn browse(
-    State(state): State<AppState>,
-    Path(profile_name): Path<String>,
-    Query(params): Query<BrowseParams>,
-) -> Result<Json<BrowseResponse>, AppError> {
-    let profile = get_profile(&state, &profile_name)?;
-
-    let prefix = params.prefix.unwrap_or_default();
-
-    let mut req = profile
-        .state
-        .s3_client
-        .list_objects_v2()
-        .bucket(&profile.state.bucket_name)
-        .delimiter("/")
-        .prefix(&prefix);
-
-    if let Some(token) = &params.continuation_token {
-        req = req.continuation_token(token);
-    }
-
-    let output = req.send().await.context("failed to list S3 objects")?;
-
-    let folders: Vec<BrowseFolder> = output
-        .common_prefixes()
-        .iter()
-        .filter_map(|cp| {
-            let key = cp.prefix()?.to_string();
-            let name = key.strip_prefix(&prefix).unwrap_or(&key).to_string();
-            Some(BrowseFolder { key, name })
-        })
-        .collect();
-
-    let files: Vec<BrowseFile> = output
-        .contents()
-        .iter()
-        .filter_map(|obj| {
-            let key = obj.key()?.to_string();
-            if key == prefix {
-                return None;
-            }
-            let name = key.strip_prefix(&prefix).unwrap_or(&key).to_string();
-            let size = obj.size().unwrap_or(0) as u64;
-            let last_modified = obj
-                .last_modified()
-                .map(|dt| {
-                    dt.fmt(aws_sdk_s3::primitives::DateTimeFormat::DateTime)
-                        .unwrap_or_default()
-                })
-                .unwrap_or_default();
-            Some(BrowseFile { key, name, size, last_modified })
-        })
-        .collect();
-
-    let is_truncated = output.is_truncated().unwrap_or(false);
-    let next_continuation_token = if is_truncated {
-        output.next_continuation_token().map(|s| s.to_string())
-    } else {
-        None
-    };
-
-    Ok(Json(BrowseResponse {
-        prefix,
-        folders,
-        files,
-        is_truncated,
-        next_continuation_token,
-    }))
 }

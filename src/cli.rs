@@ -15,7 +15,7 @@ fn default_config_path() -> PathBuf {
 }
 
 #[derive(Parser)]
-#[command(name = "minisearch", version, about = "S3 file browser with full-text search")]
+#[command(name = "minisearch", version, about = "S3/WebDAV file browser with full-text search")]
 pub struct Cli {
     #[arg(short, long, env = "MINISEARCH_CONFIG", default_value_os_t = default_config_path())]
     pub config: PathBuf,

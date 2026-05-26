@@ -8,6 +8,7 @@ use tantivy::query::TermQuery;
 use tantivy::schema::{IndexRecordOption, Value};
 use tantivy::{doc, Searcher, Term, TantivyDocument};
 
+use crate::backend::Backend;
 use crate::search;
 
 const TEXT_EXTENSIONS: &[&str] = &[
@@ -124,53 +125,38 @@ fn check_bucket_id(
 }
 
 async fn validate_bucket_id(
-    s3_client: &aws_sdk_s3::Client,
-    bucket_name: &str,
+    backend: &Backend,
     work_dir: &Path,
 ) -> anyhow::Result<Option<String>> {
     let state = crate::state::read_state(work_dir).await;
     let state_exists = state.is_some();
     let local_id = state.as_ref().and_then(|s| s.bucket_id.as_deref());
 
-    let marker_result = s3_client
-        .get_object()
-        .bucket(bucket_name)
-        .key(BUCKET_ID_MARKER)
-        .send()
-        .await;
-
-    let remote_id: Option<String> = match marker_result {
-        Ok(output) => {
-            let bytes = output.body.collect().await
-                .context("failed to read .minisearch-bucketid body")?;
-            let content = String::from_utf8(bytes.into_bytes().into())
-                .context(".minisearch-bucketid is not valid UTF-8")?;
-            let trimmed = content.trim().to_string();
-            if trimmed.is_empty() {
-                anyhow::bail!(
-                    "bucket marker {BUCKET_ID_MARKER} exists but is empty — \
-                     it must contain a non-empty identifier"
-                );
-            }
-            Some(trimmed)
-        }
-        Err(err) => {
-            let is_no_such_key = err
-                .as_service_error()
-                .is_some_and(|e| e.is_no_such_key());
-            if is_no_such_key {
-                None
-            } else {
-                return Err(err).context("failed to check .minisearch-bucketid on bucket");
-            }
-        }
-    };
+    let remote_id = backend
+        .get_marker_content(BUCKET_ID_MARKER)
+        .await?;
 
     let result = check_bucket_id(state_exists, local_id, remote_id.as_deref())?;
     if let Some(id) = &result {
         info!("bucket ID verified: {id}");
     }
     Ok(result)
+}
+
+fn validate_backend_consistency(
+    state: Option<&crate::state::IndexState>,
+    config_backend: &str,
+) -> anyhow::Result<()> {
+    if let Some(state) = state
+        && let Some(state_backend) = &state.backend
+        && state_backend != config_backend
+    {
+        anyhow::bail!(
+            "backend mismatch: state.json has '{state_backend}' but config has '{config_backend}' \
+             — delete the work directory and re-index"
+        );
+    }
+    Ok(())
 }
 
 fn lookup_last_modified(
@@ -188,15 +174,26 @@ fn lookup_last_modified(
         .map(|s| s.to_string())
 }
 
-pub async fn run_indexer(profile: &crate::config::ProfileConfig, work_dir: &Path) -> anyhow::Result<()> {
+pub async fn run_indexer(
+    profile: &crate::config::ProfileConfig,
+    backend: &Backend,
+    work_dir: &Path,
+) -> anyhow::Result<()> {
     info!("indexing profile: {}", profile.name);
-    let s3_client = profile.s3_client().await;
-    let bucket_id = validate_bucket_id(&s3_client, &profile.s3_bucket_name, work_dir).await?;
+
+    let state = crate::state::read_state(work_dir).await;
+    validate_backend_consistency(state.as_ref(), backend.backend_name())?;
+
+    let bucket_id = validate_bucket_id(backend, work_dir).await?;
 
     let search_schema = search::build_schema();
     let index_path = work_dir.join(crate::config::INDEX_DIR);
-    let bucket_name = &profile.s3_bucket_name;
     let index = search::open_or_create_index(&index_path, &search_schema.schema).await?;
+
+    if state.is_none() {
+        write_state(work_dir, backend.backend_name(), &bucket_id, "in progress").await?;
+        info!("created initial state.json");
+    }
 
     let lookup_searcher = index.reader().ok().map(|r| r.searcher());
 
@@ -211,62 +208,76 @@ pub async fn run_indexer(profile: &crate::config::ProfileConfig, work_dir: &Path
     let mut failed = 0usize;
     let mut seen_keys = HashSet::new();
     let mut failed_keys = HashSet::new();
-    let mut continuation_token: Option<String> = None;
 
-    loop {
-        let mut req = s3_client.list_objects_v2().bucket(bucket_name);
-        if let Some(token) = &continuation_token {
-            req = req.continuation_token(token);
+    let objects = backend.list_all_objects().await?;
+
+    for obj in &objects {
+        let key = &obj.key;
+        let size = obj.size;
+        let last_modified = &obj.last_modified;
+
+        seen_keys.insert(key.clone());
+
+        if let Some(searcher) = &lookup_searcher
+            && let Some(indexed_modified) = lookup_last_modified(searcher, &search_schema, key)
+            && indexed_modified == *last_modified
+        {
+            unchanged += 1;
+            continue;
         }
-        let output = req.send().await.context("failed to list S3 objects")?;
 
-        let contents = output.contents();
-        for obj in contents {
-            let key = match obj.key() {
-                Some(k) => k.to_string(),
-                None => continue,
-            };
-            let size = obj.size().unwrap_or(0) as u64;
-            let last_modified = obj
-                .last_modified()
-                .map(|dt| {
-                    dt.fmt(aws_sdk_s3::primitives::DateTimeFormat::DateTime)
-                        .unwrap_or_default()
-                })
-                .unwrap_or_default();
+        let ext = extract_extension(key);
 
-            seen_keys.insert(key.clone());
-
-            if let Some(searcher) = &lookup_searcher
-                && let Some(indexed_modified) = lookup_last_modified(searcher, &search_schema, &key)
-                && indexed_modified == last_modified
-            {
-                unchanged += 1;
-                continue;
+        let is_text = if is_text_by_name(key) {
+            true
+        } else if let Some(ct) = &obj.content_type {
+            is_text_content_type(ct)
+        } else {
+            match backend.head_content_type(key).await {
+                Ok(Some(ct)) => is_text_content_type(&ct),
+                _ => false,
             }
+        };
 
-            let ext = extract_extension(&key);
+        if !is_text {
+            debug!("indexing (filename only): {key}");
+            writer.delete_term(Term::from_field_text(search_schema.key_raw, key));
+            writer.add_document(doc!(
+                search_schema.key => key.as_str(),
+                search_schema.key_raw => key.as_str(),
+                search_schema.extension => ext.as_str(),
+                search_schema.size => size,
+                search_schema.last_modified => last_modified.as_str(),
+            ))?;
+            indexed_filename_only += 1;
+        } else {
+            debug!("indexing: {key}");
 
-            let is_text = if is_text_by_name(&key) {
-                true
-            } else {
-                match s3_client
-                    .head_object()
-                    .bucket(bucket_name)
-                    .key(&key)
-                    .send()
-                    .await
-                {
-                    Ok(head) => head
-                        .content_type()
-                        .is_some_and(is_text_content_type),
-                    Err(_) => false,
+            let body = match backend.get_object_body(key).await {
+                Ok(bytes) => bytes,
+                Err(e) => {
+                    warn!("failed to download {key}: {e}");
+                    failed_keys.insert(key.clone());
+                    failed += 1;
+                    continue;
                 }
             };
 
-            if !is_text {
-                debug!("indexing (filename only): {key}");
-                writer.delete_term(Term::from_field_text(search_schema.key_raw, &key));
+            writer.delete_term(Term::from_field_text(search_schema.key_raw, key));
+            let text = String::from_utf8(body).ok();
+
+            if let Some(text) = &text {
+                writer.add_document(doc!(
+                    search_schema.key => key.as_str(),
+                    search_schema.key_raw => key.as_str(),
+                    search_schema.content => text.as_str(),
+                    search_schema.extension => ext.as_str(),
+                    search_schema.size => size,
+                    search_schema.last_modified => last_modified.as_str(),
+                ))?;
+                indexed += 1;
+            } else {
+                debug!("non-utf8, indexing filename only: {key}");
                 writer.add_document(doc!(
                     search_schema.key => key.as_str(),
                     search_schema.key_raw => key.as_str(),
@@ -275,70 +286,13 @@ pub async fn run_indexer(profile: &crate::config::ProfileConfig, work_dir: &Path
                     search_schema.last_modified => last_modified.as_str(),
                 ))?;
                 indexed_filename_only += 1;
-            } else {
-                debug!("indexing: {key}");
-
-                let body = match s3_client
-                    .get_object()
-                    .bucket(bucket_name)
-                    .key(&key)
-                    .send()
-                    .await
-                {
-                    Ok(output) => match output.body.collect().await {
-                        Ok(bytes) => bytes.into_bytes(),
-                        Err(e) => {
-                            warn!("failed to read body for {key}: {e}");
-                            failed_keys.insert(key.clone());
-                            failed += 1;
-                            continue;
-                        }
-                    },
-                    Err(e) => {
-                        warn!("failed to download {key}: {e}");
-                        failed_keys.insert(key.clone());
-                        failed += 1;
-                        continue;
-                    }
-                };
-
-                writer.delete_term(Term::from_field_text(search_schema.key_raw, &key));
-                let text = String::from_utf8(body.into()).ok();
-
-                if let Some(text) = &text {
-                    writer.add_document(doc!(
-                        search_schema.key => key.as_str(),
-                        search_schema.key_raw => key.as_str(),
-                        search_schema.content => text.as_str(),
-                        search_schema.extension => ext.as_str(),
-                        search_schema.size => size,
-                        search_schema.last_modified => last_modified.as_str(),
-                    ))?;
-                    indexed += 1;
-                } else {
-                    debug!("non-utf8, indexing filename only: {key}");
-                    writer.add_document(doc!(
-                        search_schema.key => key.as_str(),
-                        search_schema.key_raw => key.as_str(),
-                        search_schema.extension => ext.as_str(),
-                        search_schema.size => size,
-                        search_schema.last_modified => last_modified.as_str(),
-                    ))?;
-                    indexed_filename_only += 1;
-                }
-            }
-
-            let total_indexed = indexed + indexed_filename_only;
-            if total_indexed.is_multiple_of(100) {
-                writer.commit()?;
-                info!("progress: indexed {total_indexed} files...");
             }
         }
 
-        if output.is_truncated() == Some(true) {
-            continuation_token = output.next_continuation_token().map(|s| s.to_string());
-        } else {
-            break;
+        let total_indexed = indexed + indexed_filename_only;
+        if total_indexed.is_multiple_of(100) {
+            writer.commit()?;
+            info!("progress: indexed {total_indexed} files...");
         }
     }
 
@@ -355,12 +309,26 @@ pub async fn run_indexer(profile: &crate::config::ProfileConfig, work_dir: &Path
     info!("  removed:              {removed}");
     info!("  failed:               {failed}");
 
-    let mut state = serde_json::json!({ "last_indexed": chrono::Utc::now().to_rfc3339() });
-    if let Some(id) = &bucket_id {
+    write_state(work_dir, backend.backend_name(), &bucket_id, &chrono::Utc::now().to_rfc3339()).await?;
+
+    Ok(())
+}
+
+async fn write_state(
+    work_dir: &Path,
+    backend_name: &str,
+    bucket_id: &Option<String>,
+    last_indexed: &str,
+) -> anyhow::Result<()> {
+    let mut state = serde_json::json!({
+        "last_indexed": last_indexed,
+        "backend": backend_name,
+    });
+    if let Some(id) = bucket_id {
         state["bucket_id"] = serde_json::json!(id);
     }
+    tokio::fs::create_dir_all(work_dir).await?;
     tokio::fs::write(work_dir.join("state.json"), serde_json::to_string_pretty(&state)?).await?;
-
     Ok(())
 }
 
@@ -601,5 +569,41 @@ mod tests {
             remaining,
             HashSet::from(["a.txt".to_string(), "b.txt".to_string()])
         );
+    }
+
+    #[test]
+    fn backend_consistency_ok_when_matching() {
+        let state = crate::state::IndexState {
+            last_indexed: "2025-01-01T00:00:00Z".to_string(),
+            bucket_id: None,
+            backend: Some("s3".to_string()),
+        };
+        validate_backend_consistency(Some(&state), "s3").unwrap();
+    }
+
+    #[test]
+    fn backend_consistency_ok_when_no_state() {
+        validate_backend_consistency(None, "webdav").unwrap();
+    }
+
+    #[test]
+    fn backend_consistency_ok_when_state_has_no_backend() {
+        let state = crate::state::IndexState {
+            last_indexed: "2025-01-01T00:00:00Z".to_string(),
+            bucket_id: None,
+            backend: None,
+        };
+        validate_backend_consistency(Some(&state), "webdav").unwrap();
+    }
+
+    #[test]
+    fn backend_consistency_fails_on_mismatch() {
+        let state = crate::state::IndexState {
+            last_indexed: "2025-01-01T00:00:00Z".to_string(),
+            bucket_id: None,
+            backend: Some("s3".to_string()),
+        };
+        let err = validate_backend_consistency(Some(&state), "webdav").unwrap_err();
+        assert!(err.to_string().contains("backend mismatch"));
     }
 }
