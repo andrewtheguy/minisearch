@@ -32,9 +32,9 @@ pub enum Commands {
         #[arg(short, long)]
         profile: String,
 
-        /// Port to listen on
-        #[arg(long, default_value_t = 52378)]
-        port: u16,
+        /// Address to bind to (host:port, :port for all interfaces, or localhost:port for dual-stack)
+        #[arg(long, default_value = "localhost:52378", value_parser = parse_bind)]
+        bind: BindTarget,
     },
     /// Index S3 bucket contents into Tantivy
     Index {
@@ -52,6 +52,61 @@ pub enum Commands {
         #[arg(short, long)]
         profile: Option<String>,
     },
+}
+
+const DEFAULT_PORT: u16 = 52378;
+
+#[derive(Clone, Debug)]
+pub enum BindTarget {
+    Localhost(u16),
+    AllInterfaces(u16),
+    Explicit(String, u16),
+}
+
+fn parse_port(s: &str) -> Result<u16, String> {
+    let port: u16 = s.parse().map_err(|_| format!("invalid port: '{s}'"))?;
+    if port == 0 {
+        return Err(format!("invalid port: '{s}'"));
+    }
+    Ok(port)
+}
+
+fn parse_bind(s: &str) -> Result<BindTarget, String> {
+    let s = s.trim();
+    if s.is_empty() {
+        return Err("bind address must not be empty".into());
+    }
+
+    let (host, port) = if s.starts_with('[') {
+        let close = s.find(']').ok_or("missing closing ']' in IPv6 address")?;
+        let host = &s[1..close];
+        let rest = &s[close + 1..];
+        if rest.is_empty() {
+            (host.to_string(), DEFAULT_PORT)
+        } else if let Some(port_str) = rest.strip_prefix(':') {
+            (host.to_string(), parse_port(port_str)?)
+        } else {
+            return Err(format!("unexpected characters after ']': '{rest}' (expected ':PORT' or nothing)"));
+        }
+    } else if let Some(colon_pos) = s.rfind(':') {
+        let host = &s[..colon_pos];
+        let port_str = &s[colon_pos + 1..];
+        if port_str.is_empty() {
+            (host.to_string(), DEFAULT_PORT)
+        } else {
+            (host.to_string(), parse_port(port_str)?)
+        }
+    } else {
+        (s.to_string(), DEFAULT_PORT)
+    };
+
+    if host.is_empty() {
+        Ok(BindTarget::AllInterfaces(port))
+    } else if host.eq_ignore_ascii_case("localhost") {
+        Ok(BindTarget::Localhost(port))
+    } else {
+        Ok(BindTarget::Explicit(host, port))
+    }
 }
 
 fn parse_duration(s: &str) -> Result<Duration, String> {
@@ -82,4 +137,72 @@ fn parse_duration(s: &str) -> Result<Duration, String> {
         return Err("duration must be greater than zero".into());
     }
     Ok(Duration::from_secs(total_secs))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn bind_localhost_default() {
+        assert!(matches!(parse_bind("localhost:52378").unwrap(), BindTarget::Localhost(52378)));
+    }
+
+    #[test]
+    fn bind_localhost_custom_port() {
+        assert!(matches!(parse_bind("localhost:8080").unwrap(), BindTarget::Localhost(8080)));
+    }
+
+    #[test]
+    fn bind_localhost_no_port() {
+        assert!(matches!(parse_bind("localhost").unwrap(), BindTarget::Localhost(52378)));
+    }
+
+    #[test]
+    fn bind_localhost_case_insensitive() {
+        assert!(matches!(parse_bind("LOCALHOST:9090").unwrap(), BindTarget::Localhost(9090)));
+    }
+
+    #[test]
+    fn bind_all_interfaces() {
+        assert!(matches!(parse_bind(":8080").unwrap(), BindTarget::AllInterfaces(8080)));
+    }
+
+    #[test]
+    fn bind_explicit_ipv4() {
+        let b = parse_bind("192.168.1.5:3000").unwrap();
+        assert!(matches!(b, BindTarget::Explicit(ref h, 3000) if h == "192.168.1.5"));
+    }
+
+    #[test]
+    fn bind_explicit_ipv6() {
+        let b = parse_bind("[::1]:8080").unwrap();
+        assert!(matches!(b, BindTarget::Explicit(ref h, 8080) if h == "::1"));
+    }
+
+    #[test]
+    fn bind_ipv6_no_port() {
+        let b = parse_bind("[::1]").unwrap();
+        assert!(matches!(b, BindTarget::Explicit(ref h, 52378) if h == "::1"));
+    }
+
+    #[test]
+    fn bind_port_zero_rejected() {
+        assert!(parse_bind(":0").is_err());
+    }
+
+    #[test]
+    fn bind_invalid_port() {
+        assert!(parse_bind("localhost:abc").is_err());
+    }
+
+    #[test]
+    fn bind_empty_rejected() {
+        assert!(parse_bind("").is_err());
+    }
+
+    #[test]
+    fn bind_trailing_colon_uses_default_port() {
+        assert!(matches!(parse_bind("localhost:").unwrap(), BindTarget::Localhost(52378)));
+    }
 }

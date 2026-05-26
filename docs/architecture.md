@@ -41,7 +41,7 @@ The application ships as a single binary. The React frontend is compiled and emb
 The binary has three subcommands:
 
 - **`index`** — Scans an S3 bucket or WebDAV server, downloads text files, and builds/updates the Tantivy index on disk. Requires a `--profile` flag to specify which profile to index.
-- **`serve`** — Starts the Axum web server on port 52378 for a single profile. Requires `--profile` flag. Validates backend connectivity and search index on startup.
+- **`serve`** — Starts the Axum web server for a single profile. Requires `--profile` flag. Use `--bind` to set the listen address (default: `localhost:52378`). Validates backend connectivity and search index on startup.
 - **`status`** — Shows profile status: name, description, backend type, whether the index exists, and last indexed time. Accepts optional `--profile` to filter to a single profile.
 
 Configuration is loaded from a TOML file (`-c`/`--config` flag or `MINISEARCH_CONFIG` env var).
@@ -53,7 +53,7 @@ Configuration is loaded from a TOML file (`-c`/`--config` flag or `MINISEARCH_CO
 | Module | Responsibility |
 |---|---|
 | `main.rs` | Entry point — parses CLI args, loads config, dispatches to indexer or server |
-| `cli.rs` | Clap-based CLI definition (`Serve` / `Index` commands, `--profile` flag) |
+| `cli.rs` | Clap-based CLI definition (`Serve` / `Index` commands, `--profile`/`--bind` flags) |
 | `config.rs` | TOML config parsing with multi-profile support, profile name validation, backend construction |
 | `state.rs` | Per-profile shared state (`ProfileEntry`, `ProfileState`) organized in `AppState` |
 | `backend.rs` | `Backend` enum (S3/WebDAV) with unified methods for listing, downloading, browsing, and presigning |
@@ -224,7 +224,7 @@ The frontend is built first, then `rust-embed` bundles the `frontend/dist/` dire
 ### Development
 
 ```bash
-# Backend (port 52378)
+# Backend (default bind: localhost:52378)
 cargo run -- -c config.toml serve --profile my-bucket
 
 # Frontend dev server (port 5173, proxies /api to :52378)

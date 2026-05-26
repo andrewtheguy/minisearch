@@ -74,7 +74,7 @@ async fn main() -> anyhow::Result<()> {
                 println!();
             }
         }
-        Commands::Serve { profile: profile_name, port } => {
+        Commands::Serve { profile: profile_name, bind } => {
             let profile_config = config
                 .profiles
                 .iter()
@@ -127,23 +127,47 @@ async fn main() -> anyhow::Result<()> {
                 .with_state(state)
                 .fallback(assets::static_handler);
 
-            let addr_v6 = format!("[::1]:{port}");
-            let addr_v4 = format!("127.0.0.1:{port}");
-            let listener_v6 = tokio::net::TcpListener::bind(&addr_v6)
-                .await
-                .with_context(|| format!("failed to bind to {addr_v6}"))?;
-            let listener_v4 = tokio::net::TcpListener::bind(&addr_v4)
-                .await
-                .with_context(|| format!("failed to bind to {addr_v4}"))?;
-            info!("listening on http://localhost:{port}");
+            match bind {
+                cli::BindTarget::Localhost(port) => {
+                    let addr_v6 = format!("[::1]:{port}");
+                    let addr_v4 = format!("127.0.0.1:{port}");
+                    let listener_v6 = tokio::net::TcpListener::bind(&addr_v6)
+                        .await
+                        .with_context(|| format!("failed to bind to {addr_v6}"))?;
+                    let listener_v4 = tokio::net::TcpListener::bind(&addr_v4)
+                        .await
+                        .with_context(|| format!("failed to bind to {addr_v4}"))?;
+                    info!("listening on http://localhost:{port}");
 
-            let app_clone = app.clone();
-            tokio::spawn(async move {
-                if let Err(e) = axum::serve(listener_v6, app_clone).await {
-                    error!("IPv6 listener error: {e}");
+                    let app_clone = app.clone();
+                    let v6 = axum::serve(listener_v6, app_clone);
+                    let v4 = axum::serve(listener_v4, app);
+                    tokio::select! {
+                        res = v4 => res.context("IPv4 listener error")?,
+                        res = v6 => res.context("IPv6 listener error")?,
+                    }
                 }
-            });
-            axum::serve(listener_v4, app).await.context("server error")?;
+                cli::BindTarget::AllInterfaces(port) => {
+                    let addr = format!("[::]:{port}");
+                    let listener = tokio::net::TcpListener::bind(&addr)
+                        .await
+                        .with_context(|| format!("failed to bind to {addr}"))?;
+                    info!("listening on http://[::]:{port}");
+                    axum::serve(listener, app).await.context("server error")?;
+                }
+                cli::BindTarget::Explicit(ref host, port) => {
+                    let addr = if host.contains(':') {
+                        format!("[{host}]:{port}")
+                    } else {
+                        format!("{host}:{port}")
+                    };
+                    let listener = tokio::net::TcpListener::bind(&addr)
+                        .await
+                        .with_context(|| format!("failed to bind to {addr}"))?;
+                    info!("listening on http://{addr}");
+                    axum::serve(listener, app).await.context("server error")?;
+                }
+            }
         }
     }
     Ok(())

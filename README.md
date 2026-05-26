@@ -92,7 +92,7 @@ minisearch status
 # Build the search index for a profile
 minisearch index --profile my-bucket
 
-# Start the web server for a profile (port 52378)
+# Start the web server for a profile (default: localhost:52378)
 minisearch serve --profile my-bucket
 
 # Or with an explicit config file
@@ -101,7 +101,7 @@ minisearch -c /path/to/config.toml serve --profile my-bucket
 
 Run `index` first to download and index all files from the backend, then `serve` to start the web UI. The server validates backend connectivity and the search index on startup — if either is unavailable, it fails immediately with a clear error. The home page redirects to `/p/<profile>/browse/` which shows a folder browser with full-text search scoped to the current folder.
 
-The server binds to localhost only (`127.0.0.1` and `[::1]`) and is not accessible from other machines. Use `--port` to change the port (default: 52378). To expose it externally, put it behind a reverse proxy.
+The server binds to localhost by default (`127.0.0.1` and `[::1]` dual-stack) and is not accessible from other machines. Use `--bind` to change the address (default: `localhost:52378`). Pass `--bind :PORT` to bind to all interfaces (`[::]`), or `--bind HOST:PORT` for a specific address. To expose it externally, put it behind a reverse proxy or use `--bind :PORT`.
 
 ## Development
 
