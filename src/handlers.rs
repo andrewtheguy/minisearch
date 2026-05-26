@@ -433,7 +433,7 @@ fn generate_signed_url(profile_name: &str, key: &str, secret: &[u8; 32], downloa
         .as_secs()
         + 3600;
 
-    let message = format!("{key}\n{expires}");
+    let message = format!("{key}\n{expires}\n{download}");
     let mut mac = HmacSha256::new_from_slice(secret).unwrap();
     mac.update(message.as_bytes());
     let sig = hex::encode(mac.finalize().into_bytes());
@@ -501,7 +501,8 @@ pub async fn fetch(
         return Err(AppError::bad_request("URL has expired"));
     }
 
-    let message = format!("{key}\n{expires}");
+    let download = params.download;
+    let message = format!("{key}\n{expires}\n{download}");
     let mut mac = HmacSha256::new_from_slice(&state.signing_secret).unwrap();
     mac.update(message.as_bytes());
     let sig_bytes =
@@ -509,7 +510,7 @@ pub async fn fetch(
     mac.verify_slice(&sig_bytes)
         .map_err(|_| AppError::bad_request("invalid signature"))?;
 
-    proxy_webdav_file(&profile.state.backend, &key, params.download).await
+    proxy_webdav_file(&profile.state.backend, &key, download).await
 }
 
 async fn proxy_webdav_file(backend: &Backend, key: &str, download: bool) -> Result<axum::response::Response, AppError> {
@@ -534,11 +535,14 @@ async fn proxy_webdav_file(backend: &Backend, key: &str, download: bool) -> Resu
 
     let body = Body::from_stream(resp.bytes_stream());
 
-    let response = axum::response::Response::builder()
+    let mut builder = axum::response::Response::builder()
         .header(header::CONTENT_TYPE, &content_type)
         .header(header::CONTENT_DISPOSITION, content_disposition(key, download))
-        .body(body)
-        .context("failed to build response")?;
+        .header(header::X_CONTENT_TYPE_OPTIONS, "nosniff");
+    if !download {
+        builder = builder.header(header::CONTENT_SECURITY_POLICY, "sandbox");
+    }
+    let response = builder.body(body).context("failed to build response")?;
 
     Ok(response)
 }
