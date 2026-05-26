@@ -1,6 +1,6 @@
 # minisearch
 
-Full-text search over S3 file contents, powered by Tantivy. Rust/Axum backend with an embedded React frontend. Supports multiple named profiles, each pointing to a different S3 bucket with its own search index.
+Full-text search and browsing for S3 file contents, powered by Tantivy. Rust/Axum backend with an embedded React frontend. Supports multiple named profiles, each pointing to a different S3 bucket with its own search index.
 
 ## Install (pre-built binary)
 
@@ -49,6 +49,8 @@ bun install
 
 ## Configuration
 
+By default, minisearch looks for its config at `~/.config/minisearch/config.toml` (or `$XDG_CONFIG_HOME/minisearch/config.toml`). Override with `-c`/`--config` or the `MINISEARCH_CONFIG` env var.
+
 Create a TOML config file with one or more `[[profiles]]` entries. Each profile defines a name, description, S3 connection details, and a unique Tantivy index path:
 
 ```toml
@@ -71,13 +73,16 @@ The binary has two subcommands:
 
 ```bash
 # Build the search index for a profile
-minisearch -c config.toml index --profile my-bucket
+minisearch index --profile my-bucket
 
 # Start the web server (port 52378)
-minisearch -c config.toml serve
+minisearch serve
+
+# Or with an explicit config file
+minisearch -c /path/to/config.toml serve
 ```
 
-Run `index` first to download and index all files from the S3 bucket, then `serve` to start the web UI. The server works without an index (search returns 503), so you can start serving immediately while building the index separately.
+Run `index` first to download and index all files from the S3 bucket, then `serve` to start the web UI. The default view is an S3 folder browser at `/p/<profile>/browse/` with a search bar for full-text search scoped to the current folder. The server works without an index (browsing works, search returns 503), so you can start serving immediately while building the index separately.
 
 ## Development
 
