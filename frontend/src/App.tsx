@@ -354,7 +354,11 @@ function BrowseView({ profileName, prefix }: { profileName: string; prefix: stri
       if (e.key === "Escape") closePreview();
     };
     document.addEventListener("keydown", handler);
-    return () => document.removeEventListener("keydown", handler);
+    document.body.style.overflow = "hidden";
+    return () => {
+      document.removeEventListener("keydown", handler);
+      document.body.style.overflow = "";
+    };
   }, [previewUrl, closePreview]);
 
   const segments = prefix ? prefix.replace(/\/$/, "").split("/") : [];
