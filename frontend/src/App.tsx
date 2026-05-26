@@ -348,6 +348,15 @@ function BrowseView({ profileName, prefix }: { profileName: string; prefix: stri
     closePreview();
   }
 
+  useEffect(() => {
+    if (!previewUrl) return;
+    const handler = (e: KeyboardEvent) => {
+      if (e.key === "Escape") closePreview();
+    };
+    document.addEventListener("keydown", handler);
+    return () => document.removeEventListener("keydown", handler);
+  }, [previewUrl, closePreview]);
+
   const segments = prefix ? prefix.replace(/\/$/, "").split("/") : [];
   const isSearchActive = searchResults !== null;
 
@@ -673,9 +682,7 @@ function BrowseView({ profileName, prefix }: { profileName: string; prefix: stri
           onClick={(e) => {
             if (e.target === e.currentTarget) closePreview();
           }}
-          onKeyDown={(e) => {
-            if (e.key === "Escape") closePreview();
-          }}
+          onKeyDown={() => {}}
         >
           <div className="flex flex-col w-full h-[90vh] mt-[5vh] mx-auto rounded-lg border border-border bg-background shadow-lg overflow-hidden">
             <div className="flex items-center justify-between border-b border-border px-4 py-2 shrink-0 gap-2">
