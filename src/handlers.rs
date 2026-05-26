@@ -1,18 +1,27 @@
 use std::collections::BTreeSet;
-use std::ops::Range;
+use std::ops::{Bound, Range};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::Context;
+use axum::body::Body;
 use axum::extract::{Path, Query, State};
+use axum::http::header;
+use axum::response::IntoResponse;
 use axum::Json;
+use hmac::{Hmac, Mac};
 use serde::{Deserialize, Serialize};
+use sha2::Sha256;
 use tantivy::collector::{Count, TopDocs};
-use tantivy::query::{BooleanQuery, Occur, Query as TantivyQuery, QueryParser, RegexQuery, TermQuery};
+use tantivy::query::{BooleanQuery, Occur, Query as TantivyQuery, QueryParser, RangeQuery, TermQuery};
 use tantivy::schema::{Field, IndexRecordOption, Value};
 use tantivy::tokenizer::{TextAnalyzer, TokenStream};
 use tantivy::{TantivyDocument, Term};
 
+use crate::backend::{Backend, content_disposition};
 use crate::error::AppError;
 use crate::state::{AppState, ProfileEntry, ProfileState, SearchState};
+
+type HmacSha256 = Hmac<Sha256>;
 
 #[derive(Deserialize, Default, Clone, Copy)]
 #[serde(rename_all = "lowercase")]
@@ -166,12 +175,10 @@ pub async fn search(
     };
 
     if let Some(pfx) = params.prefix.as_deref().filter(|p| !p.is_empty()) {
-        let escaped = regex_syntax::escape(pfx);
-        let prefix_query = RegexQuery::from_pattern(&format!("^{escaped}.*"), schema.key_raw)
-            .map_err(|e| AppError::bad_request(format!("invalid prefix: {e}")))?;
+        let prefix_query = key_prefix_query(pfx, schema.key_raw);
         query = Box::new(BooleanQuery::new(vec![
             (Occur::Must, query),
-            (Occur::Must, Box::new(prefix_query)),
+            (Occur::Must, prefix_query),
         ]));
     }
 
@@ -235,6 +242,35 @@ pub async fn search(
 
 const PAGE_LIMIT: usize = 10;
 const MAX_SNIPPET_CHARS: usize = 150;
+
+fn key_prefix_query(prefix: &str, field: Field) -> Box<dyn TantivyQuery> {
+    let lower = Bound::Included(Term::from_field_text(field, prefix));
+    let upper = key_prefix_successor(prefix)
+        .map(|upper| Bound::Excluded(Term::from_field_text(field, &upper)))
+        .unwrap_or(Bound::Unbounded);
+
+    Box::new(RangeQuery::new(lower, upper))
+}
+
+fn key_prefix_successor(prefix: &str) -> Option<String> {
+    for (idx, ch) in prefix.char_indices().rev() {
+        if let Some(next_ch) = next_scalar_value(ch) {
+            let mut successor = prefix[..idx].to_string();
+            successor.push(next_ch);
+            return Some(successor);
+        }
+    }
+    None
+}
+
+fn next_scalar_value(ch: char) -> Option<char> {
+    let next = ch as u32 + 1;
+    match next {
+        0xD800..=0xDFFF => char::from_u32(0xE000),
+        0x110000.. => None,
+        _ => char::from_u32(next),
+    }
+}
 
 fn query_terms_for_field(query: &dyn TantivyQuery, field: Field) -> BTreeSet<String> {
     let mut terms = BTreeSet::new();
@@ -414,13 +450,32 @@ fn snippet_segments(fragment: &str, ranges: &[Range<usize>]) -> Vec<SearchSnippe
 #[derive(Deserialize)]
 pub struct PresignParams {
     pub key: Option<String>,
+    #[serde(default)]
+    pub download: bool,
+}
+
+fn generate_signed_url(profile_name: &str, key: &str, secret: &[u8; 32], download: bool) -> String {
+    let expires = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_secs()
+        + 3600;
+
+    let message = format!("{key}\n{expires}\n{download}");
+    let mut mac = HmacSha256::new_from_slice(secret).unwrap();
+    mac.update(message.as_bytes());
+    let sig = hex::encode(mac.finalize().into_bytes());
+
+    let encoded_key = urlencoding::encode(key);
+    let dl = if download { "&download=true" } else { "" };
+    format!("/api/p/{profile_name}/fetch?key={encoded_key}&expires={expires}&sig={sig}{dl}")
 }
 
 pub async fn presign(
     State(state): State<AppState>,
     Path(profile_name): Path<String>,
     Query(params): Query<PresignParams>,
-) -> Result<axum::response::Redirect, AppError> {
+) -> Result<axum::response::Response, AppError> {
     let profile = get_profile(&state, &profile_name)?;
 
     let key = params
@@ -428,15 +483,103 @@ pub async fn presign(
         .filter(|k| !k.trim().is_empty())
         .ok_or_else(|| AppError::bad_request("missing or empty query parameter 'key'"))?;
 
-    let url = profile
-        .state
-        .backend
-        .presign_url(&key)
-        .await
-        .context("presign failed")?
-        .ok_or_else(|| AppError::bad_request("presigned URLs are not supported for this backend"))?;
+    let download = params.download;
 
-    Ok(axum::response::Redirect::temporary(&url))
+    // S3 backends generate native presigned URLs; WebDAV falls back to HMAC-signed fetch URLs
+    let url = if let Some(url) = profile.state.backend.presign_url(&key, download).await.context("presign failed")? {
+        url
+    } else {
+        generate_signed_url(&profile_name, &key, &state.signing_secret, download)
+    };
+
+    // Downloads redirect so the browser handles the navigation directly;
+    // previews return JSON so the frontend can set the iframe src without a redirect in the sandbox
+    if download {
+        Ok(axum::response::Redirect::temporary(&url).into_response())
+    } else {
+        Ok(axum::response::Json(serde_json::json!({ "url": url })).into_response())
+    }
+}
+
+#[derive(Deserialize)]
+pub struct FetchParams {
+    pub key: Option<String>,
+    pub expires: Option<u64>,
+    pub sig: Option<String>,
+    #[serde(default)]
+    pub download: bool,
+}
+
+pub async fn fetch(
+    State(state): State<AppState>,
+    Path(profile_name): Path<String>,
+    Query(params): Query<FetchParams>,
+) -> Result<axum::response::Response, AppError> {
+    let profile = get_profile(&state, &profile_name)?;
+
+    let key = params
+        .key
+        .filter(|k| !k.trim().is_empty())
+        .ok_or_else(|| AppError::bad_request("missing or empty 'key'"))?;
+    let expires = params
+        .expires
+        .ok_or_else(|| AppError::bad_request("missing 'expires'"))?;
+    let sig = params
+        .sig
+        .filter(|s| !s.trim().is_empty())
+        .ok_or_else(|| AppError::bad_request("missing 'sig'"))?;
+
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+    if now > expires {
+        return Err(AppError::bad_request("URL has expired"));
+    }
+
+    let download = params.download;
+    let message = format!("{key}\n{expires}\n{download}");
+    let mut mac = HmacSha256::new_from_slice(&state.signing_secret).unwrap();
+    mac.update(message.as_bytes());
+    let sig_bytes =
+        hex::decode(&sig).map_err(|_| AppError::bad_request("invalid signature encoding"))?;
+    mac.verify_slice(&sig_bytes)
+        .map_err(|_| AppError::bad_request("invalid signature"))?;
+
+    proxy_webdav_file(&profile.state.backend, &key, download).await
+}
+
+async fn proxy_webdav_file(backend: &Backend, key: &str, download: bool) -> Result<axum::response::Response, AppError> {
+    let resp = backend
+        .get_stream(key)
+        .await
+        .context("failed to fetch file from backend")?;
+
+    // Prefer extension-based guess over WebDAV's content-type, which is often application/octet-stream
+    let mime = new_mime_guess::from_path(key).first_or_octet_stream();
+    let content_type = if mime.essence_str() == "application/octet-stream" {
+        resp.headers()
+            .get("content-type")
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or("application/octet-stream")
+            .to_string()
+    } else if mime.type_() == "text" {
+        format!("{mime}; charset=utf-8")
+    } else {
+        mime.to_string()
+    };
+
+    let body = Body::from_stream(resp.bytes_stream());
+
+    let mut builder = axum::response::Response::builder()
+        .header(header::CONTENT_TYPE, &content_type)
+        .header(header::CONTENT_DISPOSITION, content_disposition(key, download));
+    if !download {
+        builder = builder.header(header::CONTENT_SECURITY_POLICY, "sandbox");
+    }
+    let response = builder.body(body).context("failed to build response")?;
+
+    Ok(response)
 }
 
 #[derive(Deserialize)]
@@ -513,6 +656,7 @@ pub async fn browse(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tantivy::doc;
 
     fn jieba_terms(text: &str) -> BTreeSet<String> {
         let mut terms = BTreeSet::new();
@@ -522,6 +666,106 @@ mod tests {
             terms.insert(token.text.to_lowercase());
         }
         terms
+    }
+
+    #[test]
+    fn key_prefix_successor_handles_utf8_boundaries() {
+        assert_eq!(key_prefix_successor("Kilo-Code").as_deref(), Some("Kilo-Codf"));
+        assert_eq!(
+            key_prefix_successor("\u{d7ff}").as_deref(),
+            Some("\u{e000}"),
+        );
+        assert_eq!(key_prefix_successor("\u{10ffff}"), None);
+    }
+
+    #[test]
+    fn key_prefix_query_matches_kilo_code_prefix() {
+        let schema = crate::search::build_schema();
+        let index = tantivy::Index::create_in_ram(schema.schema.clone());
+        crate::search::register_tokenizers(&index);
+        let mut writer = index.writer(15_000_000).unwrap();
+        for key in ["Kilo-Code/doc.txt", "Kilo-Code-notes/doc.txt"] {
+            writer
+                .add_document(doc!(
+                    schema.key => key,
+                    schema.key_raw => key,
+                    schema.content => "DS",
+                    schema.extension => "txt",
+                    schema.size => 0u64,
+                    schema.last_modified => "2026-05-26T00:00:00Z",
+                ))
+                .unwrap();
+        }
+        writer.commit().unwrap();
+
+        let reader = index.reader().unwrap();
+        let searcher = reader.searcher();
+        let query = key_prefix_query("Kilo-Code", schema.key_raw);
+        let top_docs = searcher
+            .search(&*query, &TopDocs::with_limit(10).order_by_score())
+            .unwrap();
+        let keys = top_docs
+            .iter()
+            .map(|(_, doc_address)| {
+                let doc: TantivyDocument = searcher.doc(*doc_address).unwrap();
+                doc.get_first(schema.key_raw)
+                    .and_then(|value| value.as_str())
+                    .unwrap()
+                    .to_string()
+            })
+            .collect::<BTreeSet<_>>();
+
+        assert_eq!(
+            keys,
+            BTreeSet::from([
+                "Kilo-Code/doc.txt".to_string(),
+                "Kilo-Code-notes/doc.txt".to_string(),
+            ]),
+        );
+    }
+
+    #[test]
+    fn key_prefix_query_does_not_match_prefix_in_middle() {
+        let schema = crate::search::build_schema();
+        let index = tantivy::Index::create_in_ram(schema.schema.clone());
+        crate::search::register_tokenizers(&index);
+        let mut writer = index.writer(15_000_000).unwrap();
+        for key in [
+            "Kilo-Code/doc.txt",
+            "Other/Kilo-Code/doc.txt",
+            "Other/nested/Kilo-Code/doc.txt",
+        ] {
+            writer
+                .add_document(doc!(
+                    schema.key => key,
+                    schema.key_raw => key,
+                    schema.content => "DS",
+                    schema.extension => "txt",
+                    schema.size => 0u64,
+                    schema.last_modified => "2026-05-26T00:00:00Z",
+                ))
+                .unwrap();
+        }
+        writer.commit().unwrap();
+
+        let reader = index.reader().unwrap();
+        let searcher = reader.searcher();
+        let query = key_prefix_query("Kilo-Code", schema.key_raw);
+        let top_docs = searcher
+            .search(&*query, &TopDocs::with_limit(10).order_by_score())
+            .unwrap();
+        let keys = top_docs
+            .iter()
+            .map(|(_, doc_address)| {
+                let doc: TantivyDocument = searcher.doc(*doc_address).unwrap();
+                doc.get_first(schema.key_raw)
+                    .and_then(|value| value.as_str())
+                    .unwrap()
+                    .to_string()
+            })
+            .collect::<BTreeSet<_>>();
+
+        assert_eq!(keys, BTreeSet::from(["Kilo-Code/doc.txt".to_string()]));
     }
 
     #[test]

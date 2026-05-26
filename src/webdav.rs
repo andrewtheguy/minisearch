@@ -142,6 +142,23 @@ impl WebDavClient {
             .context("failed to read GET body")
     }
 
+    pub async fn get_stream(&self, path: &str) -> anyhow::Result<reqwest::Response> {
+        let url = self.resolve_url(path);
+        let resp = self
+            .client
+            .get(&url)
+            .basic_auth(&self.username, Some(&self.password))
+            .send()
+            .await
+            .context("GET request failed")?;
+
+        if !resp.status().is_success() {
+            bail!("GET returned HTTP {}", resp.status());
+        }
+
+        Ok(resp)
+    }
+
     pub async fn get_optional(&self, path: &str) -> anyhow::Result<Option<Vec<u8>>> {
         let url = self.resolve_url(path);
         let resp = self

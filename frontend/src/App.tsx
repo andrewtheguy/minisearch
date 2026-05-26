@@ -1,3 +1,4 @@
+import { Check, ClipboardCopy, Download, X } from "lucide-react";
 import { type FormEvent, useCallback, useEffect, useRef, useState } from "react";
 import { Navigate, Route, Routes, useNavigate, useParams, useSearchParams } from "react-router";
 import { Alert, AlertDescription } from "@/components/ui/alert";
@@ -117,7 +118,6 @@ function BrowseView({ profileName, prefix }: { profileName: string; prefix: stri
   const [searchParams, setSearchParams] = useSearchParams();
   const [profileDescription, setProfileDescription] = useState<string>("");
   const [lastIndexed, setLastIndexed] = useState<string>("");
-  const [supportsPresign, setSupportsPresign] = useState<boolean>(false);
 
   const [folders, setFolders] = useState<BrowseFolder[]>([]);
   const [files, setFiles] = useState<BrowseFile[]>([]);
@@ -146,6 +146,40 @@ function BrowseView({ profileName, prefix }: { profileName: string; prefix: stri
   const [ext, setExt] = useState(() => searchParams.get("ext") || "");
   const [extPreset, setExtPreset] = useState(() => matchPreset(searchParams.get("ext") || ""));
   const searchControllerRef = useRef<AbortController | null>(null);
+  const previewControllerRef = useRef<AbortController | null>(null);
+
+  const [previewUrl, setPreviewUrl] = useState<string | null>(null);
+  const [presignUrl, setPresignUrl] = useState<string | null>(null);
+  const [previewFileName, setPreviewFileName] = useState<string | null>(null);
+  const [previewKey, setPreviewKey] = useState<string | null>(null);
+  const [copyStatus, setCopyStatus] = useState<"idle" | "copied" | "failed">("idle");
+
+  async function openPreview(key: string) {
+    previewControllerRef.current?.abort();
+    const controller = new AbortController();
+    previewControllerRef.current = controller;
+    const base = `/api/p/${profileName}/presign?key=${encodeURIComponent(key)}`;
+    setPresignUrl(base);
+    setPreviewFileName(key.split("/").pop() || key);
+    setPreviewKey(key);
+    setCopyStatus("idle");
+    try {
+      const resp = await fetch(base, { signal: controller.signal });
+      if (!resp.ok) throw new Error(resp.statusText);
+      const { url } = await resp.json();
+      setPreviewUrl(url);
+    } catch (e) {
+      if (e instanceof DOMException && e.name === "AbortError") return;
+      closePreview();
+    }
+  }
+
+  const closePreview = useCallback(() => {
+    setPreviewUrl(null);
+    setPresignUrl(null);
+    setPreviewFileName(null);
+    setPreviewKey(null);
+  }, []);
 
   const fetchBrowsePage = useCallback(
     (token: string | null, pageIdx: number) => {
@@ -196,10 +230,11 @@ function BrowseView({ profileName, prefix }: { profileName: string; prefix: stri
     setBrowsePageIndex(0);
     setPageTokens([null]);
     fetchBrowsePage(null, 0);
+    closePreview();
     return () => {
       browseControllerRef.current?.abort();
     };
-  }, [fetchBrowsePage]);
+  }, [fetchBrowsePage, closePreview]);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -210,7 +245,6 @@ function BrowseView({ profileName, prefix }: { profileName: string; prefix: stri
               name: string;
               description: string;
               last_indexed: string;
-              supports_presign: boolean;
             }>)
           : null,
       )
@@ -218,7 +252,6 @@ function BrowseView({ profileName, prefix }: { profileName: string; prefix: stri
         if (data) {
           setProfileDescription(data.description);
           setLastIndexed(data.last_indexed);
-          setSupportsPresign(data.supports_presign);
         }
       })
       .catch((err) => {
@@ -329,13 +362,27 @@ function BrowseView({ profileName, prefix }: { profileName: string; prefix: stri
     setBrowsePageIndex(0);
     setPageTokens([null]);
     fetchBrowsePage(null, 0);
+    closePreview();
   }
 
+  useEffect(() => {
+    if (!presignUrl) return;
+    const handler = (e: KeyboardEvent) => {
+      if (e.key === "Escape") closePreview();
+    };
+    document.addEventListener("keydown", handler);
+    document.body.style.overflow = "hidden";
+    return () => {
+      document.removeEventListener("keydown", handler);
+      document.body.style.overflow = "";
+    };
+  }, [presignUrl, closePreview]);
+
   const segments = prefix ? prefix.replace(/\/$/, "").split("/") : [];
-  const isSearchActive = searchResults !== null;
+  const isSearchActive = searchResults !== null || searching || searchError !== null;
 
   return (
-    <div className="mx-auto max-w-4xl px-4 py-8">
+    <div className="px-8 py-8">
       <div className="mb-6">
         <div className="flex items-baseline gap-3">
           <h1 className="text-3xl font-bold tracking-tight">{profileName}</h1>
@@ -434,7 +481,7 @@ function BrowseView({ profileName, prefix }: { profileName: string; prefix: stri
             </Alert>
           )}
 
-          {!searching && !searchError && (
+          {!searching && !searchError && searchResults && (
             <>
               <p className="text-sm text-muted-foreground">
                 {totalCount !== null && totalPages > 1
@@ -442,20 +489,18 @@ function BrowseView({ profileName, prefix }: { profileName: string; prefix: stri
                   : `${searchResults.length} result${searchResults.length !== 1 ? "s" : ""} found`}
               </p>
               {searchResults.map((result) => (
-                <Card key={result.key}>
+                <Card
+                  key={result.key}
+                  className={previewKey === result.key ? "ring-2 ring-primary" : ""}
+                >
                   <CardContent>
-                    {supportsPresign ? (
-                      <a
-                        className="text-primary font-semibold hover:underline block mb-1"
-                        href={`/api/p/${profileName}/presign?key=${encodeURIComponent(result.key)}`}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                      >
-                        {result.key}
-                      </a>
-                    ) : (
-                      <span className="font-semibold block mb-1">{result.key}</span>
-                    )}
+                    <button
+                      type="button"
+                      className="text-primary font-semibold hover:underline block mb-1 bg-transparent border-none p-0 cursor-pointer text-left"
+                      onClick={() => openPreview(result.key)}
+                    >
+                      {result.key}
+                    </button>
                     <p className="text-sm text-muted-foreground mb-2">
                       {formatBytes(result.size)} &middot;{" "}
                       {new Date(result.last_modified).toLocaleString()}
@@ -601,40 +646,23 @@ function BrowseView({ profileName, prefix }: { profileName: string; prefix: stri
 
               {files.length > 0 && (
                 <div className="space-y-1">
-                  {files.map((file) =>
-                    supportsPresign ? (
-                      <a
-                        key={file.key}
-                        className="w-full text-left px-3 py-2 rounded-md hover:bg-accent transition-colors flex items-center gap-2"
-                        href={`/api/p/${profileName}/presign?key=${encodeURIComponent(file.key)}`}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                      >
-                        <span className="text-muted-foreground">&#128196;</span>
-                        <span className="flex-1 font-medium">{file.name}</span>
-                        <span className="text-sm text-muted-foreground">
-                          {formatBytes(file.size)}
-                        </span>
-                        <span className="text-sm text-muted-foreground">
-                          {file.last_modified ? new Date(file.last_modified).toLocaleString() : ""}
-                        </span>
-                      </a>
-                    ) : (
-                      <div
-                        key={file.key}
-                        className="w-full text-left px-3 py-2 rounded-md flex items-center gap-2"
-                      >
-                        <span className="text-muted-foreground">&#128196;</span>
-                        <span className="flex-1 font-medium">{file.name}</span>
-                        <span className="text-sm text-muted-foreground">
-                          {formatBytes(file.size)}
-                        </span>
-                        <span className="text-sm text-muted-foreground">
-                          {file.last_modified ? new Date(file.last_modified).toLocaleString() : ""}
-                        </span>
-                      </div>
-                    ),
-                  )}
+                  {files.map((file) => (
+                    <button
+                      key={file.key}
+                      type="button"
+                      className={`w-full text-left px-3 py-2 rounded-md hover:bg-accent transition-colors flex items-center gap-2 ${previewKey === file.key ? "bg-accent" : ""}`}
+                      onClick={() => openPreview(file.key)}
+                    >
+                      <span className="text-muted-foreground">&#128196;</span>
+                      <span className="flex-1 font-medium">{file.name}</span>
+                      <span className="text-sm text-muted-foreground">
+                        {formatBytes(file.size)}
+                      </span>
+                      <span className="text-sm text-muted-foreground">
+                        {file.last_modified ? new Date(file.last_modified).toLocaleString() : ""}
+                      </span>
+                    </button>
+                  ))}
                 </div>
               )}
 
@@ -666,6 +694,83 @@ function BrowseView({ profileName, prefix }: { profileName: string; prefix: stri
             </>
           )}
         </>
+      )}
+
+      {presignUrl && (
+        <div
+          role="dialog"
+          className="fixed inset-0 z-50 flex flex-col px-8 bg-background/80 backdrop-blur-sm"
+          onClick={(e) => {
+            if (e.target === e.currentTarget) closePreview();
+          }}
+          onKeyDown={() => {}}
+        >
+          <div className="flex flex-col w-full h-[90vh] mt-[5vh] mx-auto rounded-lg border border-border bg-background shadow-lg overflow-hidden">
+            <div className="flex items-center justify-between border-b border-border px-4 py-2 shrink-0 gap-2">
+              <span className="text-sm font-medium truncate flex-1">{previewFileName}</span>
+              <div className="flex items-center gap-1">
+                <button
+                  type="button"
+                  className="inline-flex items-center justify-center rounded-md text-sm font-medium h-8 w-8 hover:bg-accent transition-colors"
+                  onClick={() => {
+                    const fullUrl = `${window.location.origin}${presignUrl}&download=true`;
+                    navigator.clipboard.writeText(fullUrl).then(
+                      () => {
+                        setCopyStatus("copied");
+                        setTimeout(() => setCopyStatus("idle"), 2000);
+                      },
+                      () => {
+                        setCopyStatus("failed");
+                        setTimeout(() => setCopyStatus("idle"), 2000);
+                      },
+                    );
+                  }}
+                  title={
+                    copyStatus === "copied"
+                      ? "Copied!"
+                      : copyStatus === "failed"
+                        ? "Failed to copy"
+                        : "Copy URL"
+                  }
+                >
+                  {copyStatus === "copied" ? (
+                    <Check className="h-4 w-4 text-green-500" />
+                  ) : (
+                    <ClipboardCopy className="h-4 w-4" />
+                  )}
+                </button>
+                <a
+                  href={`${presignUrl}&download=true`}
+                  className="inline-flex items-center justify-center rounded-md text-sm font-medium h-8 w-8 hover:bg-accent transition-colors"
+                  title="Download"
+                >
+                  <Download className="h-4 w-4" />
+                </a>
+                <button
+                  type="button"
+                  className="inline-flex items-center justify-center rounded-md text-sm font-medium h-8 w-8 hover:bg-accent transition-colors"
+                  onClick={closePreview}
+                  title="Close"
+                >
+                  <X className="h-4 w-4" />
+                </button>
+              </div>
+            </div>
+            {previewUrl ? (
+              <iframe
+                className="flex-1 w-full border-0"
+                src={previewUrl}
+                sandbox="allow-same-origin"
+                referrerPolicy="no-referrer"
+                title={`Preview: ${previewFileName}`}
+              />
+            ) : (
+              <div className="flex-1 flex items-center justify-center text-muted-foreground">
+                Loading…
+              </div>
+            )}
+          </div>
+        </div>
       )}
     </div>
   );
