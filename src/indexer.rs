@@ -190,6 +190,11 @@ pub async fn run_indexer(
     let index_path = work_dir.join(crate::config::INDEX_DIR);
     let index = search::open_or_create_index(&index_path, &search_schema.schema).await?;
 
+    if state.is_none() {
+        write_state(work_dir, backend.backend_name(), &bucket_id, "in progress").await?;
+        info!("created initial state.json");
+    }
+
     let lookup_searcher = index.reader().ok().map(|r| r.searcher());
 
     let mut writer = index
@@ -304,15 +309,26 @@ pub async fn run_indexer(
     info!("  removed:              {removed}");
     info!("  failed:               {failed}");
 
+    write_state(work_dir, backend.backend_name(), &bucket_id, &chrono::Utc::now().to_rfc3339()).await?;
+
+    Ok(())
+}
+
+async fn write_state(
+    work_dir: &Path,
+    backend_name: &str,
+    bucket_id: &Option<String>,
+    last_indexed: &str,
+) -> anyhow::Result<()> {
     let mut state = serde_json::json!({
-        "last_indexed": chrono::Utc::now().to_rfc3339(),
-        "backend": backend.backend_name(),
+        "last_indexed": last_indexed,
+        "backend": backend_name,
     });
-    if let Some(id) = &bucket_id {
+    if let Some(id) = bucket_id {
         state["bucket_id"] = serde_json::json!(id);
     }
+    tokio::fs::create_dir_all(work_dir).await?;
     tokio::fs::write(work_dir.join("state.json"), serde_json::to_string_pretty(&state)?).await?;
-
     Ok(())
 }
 
