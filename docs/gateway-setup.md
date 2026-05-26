@@ -106,8 +106,6 @@ With the POSIX backend, the S3 bucket name corresponds to a subdirectory under t
 ### WebDAV backend (rclone serve webdav)
 
 ```toml
-work_dir = "./workdir"
-
 [[profiles]]
 name = "documents"
 description = "Documents via rclone WebDAV"
@@ -120,8 +118,6 @@ webdav_password = "mypassword"
 ### S3 backend (rclone serve s3 or VersityGW)
 
 ```toml
-work_dir = "./workdir"
-
 [[profiles]]
 name = "documents"
 description = "Documents via S3 gateway"

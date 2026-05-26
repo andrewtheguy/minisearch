@@ -75,7 +75,7 @@ Configuration is loaded from a TOML file (`-c`/`--config` flag or `MINISEARCH_CO
 
 The [Jieba](https://github.com/nickel-org/tantivy-jieba) tokenizer handles both Chinese and English text segmentation.
 
-Each profile's working directory is derived as `<work_dir>/<profile_name>/` (where `work_dir` is the top-level config setting). The Tantivy index is stored under `<work_dir>/<profile_name>/tantivy_index/`. After a successful indexing run, the indexer writes `<work_dir>/<profile_name>/state.json` with a `last_indexed` timestamp.
+Each profile's working directory is derived as `<work_dir>/<profile_name>/` (where `work_dir` is the optional top-level config setting; must be an absolute path, defaults to `minisearch_workdir` next to the config file). The Tantivy index is stored under `<work_dir>/<profile_name>/tantivy_index/`. After a successful indexing run, the indexer writes `<work_dir>/<profile_name>/state.json` with a `last_indexed` timestamp.
 
 ### Indexing pipeline
 
@@ -240,10 +240,10 @@ GitHub Actions builds release binaries for:
 
 ### Configuration
 
-All configuration is in a single TOML file with a top-level `work_dir` and `[[profiles]]` array entries. Each profile specifies a `backend` type (`s3` or `webdav`) and the corresponding connection fields:
+All configuration is in a single TOML file with an optional top-level `work_dir` (must be an absolute path; defaults to `minisearch_workdir` next to the config file) and `[[profiles]]` array entries. Each profile specifies a `backend` type (`s3` or `webdav`) and the corresponding connection fields:
 
 ```toml
-work_dir = "./workdir"
+# work_dir = "/var/lib/minisearch/workdir"
 
 [[profiles]]
 name = "my-bucket"

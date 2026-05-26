@@ -101,39 +101,55 @@ impl ProfileConfig {
 }
 
 #[derive(serde::Deserialize)]
-pub struct AppConfig {
-    pub work_dir: String,
+struct RawAppConfig {
+    work_dir: Option<String>,
     #[serde(default)]
+    profiles: Vec<ProfileConfig>,
+}
+
+pub struct AppConfig {
+    pub work_dir: PathBuf,
     pub profiles: Vec<ProfileConfig>,
 }
 
 impl AppConfig {
     pub fn profile_work_dir(&self, profile_name: &str) -> PathBuf {
-        PathBuf::from(&self.work_dir).join(profile_name)
+        self.work_dir.join(profile_name)
     }
 
     pub async fn load(path: &Path) -> anyhow::Result<Self> {
         let contents = tokio::fs::read_to_string(path)
             .await
             .with_context(|| format!("failed to read config file: {}", path.display()))?;
-        Self::from_toml_str(&contents)
+        let abs_config = std::fs::canonicalize(path)
+            .with_context(|| format!("failed to resolve config path: {}", path.display()))?;
+        let config_dir = abs_config.parent()
+            .context("config path has no parent directory")?;
+        Self::from_toml_str(&contents, config_dir)
             .with_context(|| format!("failed to load config file: {}", path.display()))
     }
 
-    fn from_toml_str(contents: &str) -> anyhow::Result<Self> {
-        let config = Self::parse_toml(contents)?;
+    fn from_toml_str(contents: &str, config_dir: &Path) -> anyhow::Result<Self> {
+        let raw: RawAppConfig = toml::from_str(contents)?;
+        let work_dir = match raw.work_dir {
+            Some(dir) => {
+                let p = PathBuf::from(&dir);
+                if !p.is_absolute() {
+                    bail!("work_dir must be an absolute path, got: {dir}");
+                }
+                p
+            }
+            None => config_dir.join("minisearch_workdir"),
+        };
+        let config = Self {
+            work_dir,
+            profiles: raw.profiles,
+        };
         config.validate()?;
         Ok(config)
     }
 
-    fn parse_toml(contents: &str) -> Result<Self, toml::de::Error> {
-        toml::from_str(contents)
-    }
-
     fn validate(&self) -> anyhow::Result<()> {
-        if self.work_dir.is_empty() {
-            bail!("work_dir must not be empty");
-        }
         if self.profiles.is_empty() {
             bail!("config must contain at least one [[profiles]] entry");
         }
@@ -229,12 +245,20 @@ webdav_password = "pass"
         )
     }
 
+    fn test_config_dir() -> &'static Path {
+        Path::new("/tmp/test-config-dir")
+    }
+
     fn config_toml(profiles: &str) -> String {
-        format!("work_dir = \"tmp/test-workdir\"\n{profiles}")
+        format!("work_dir = \"/tmp/test-workdir\"\n{profiles}")
+    }
+
+    fn parse(contents: &str) -> anyhow::Result<AppConfig> {
+        AppConfig::from_toml_str(contents, test_config_dir())
     }
 
     fn parse_error(contents: &str) -> String {
-        match AppConfig::from_toml_str(contents) {
+        match parse(contents) {
             Ok(_) => panic!("expected config parse to fail"),
             Err(err) => err.to_string(),
         }
@@ -242,7 +266,7 @@ webdav_password = "pass"
 
     #[test]
     fn parses_s3_profile() {
-        let config = AppConfig::from_toml_str(&config_toml(&s3_profile_toml("docs"))).unwrap();
+        let config = parse(&config_toml(&s3_profile_toml("docs"))).unwrap();
         assert_eq!(config.profiles.len(), 1);
         assert_eq!(config.profiles[0].name, "docs");
         assert_eq!(config.profiles[0].backend, BackendType::S3);
@@ -250,8 +274,7 @@ webdav_password = "pass"
 
     #[test]
     fn parses_webdav_profile() {
-        let config =
-            AppConfig::from_toml_str(&config_toml(&webdav_profile_toml("mydav"))).unwrap();
+        let config = parse(&config_toml(&webdav_profile_toml("mydav"))).unwrap();
         assert_eq!(config.profiles.len(), 1);
         assert_eq!(config.profiles[0].name, "mydav");
         assert_eq!(config.profiles[0].backend, BackendType::Webdav);
@@ -259,7 +282,7 @@ webdav_password = "pass"
 
     #[test]
     fn parses_mixed_profiles() {
-        let config = AppConfig::from_toml_str(&config_toml(&format!(
+        let config = parse(&config_toml(&format!(
             "{}{}",
             s3_profile_toml("docs"),
             webdav_profile_toml("mydav")
@@ -270,32 +293,37 @@ webdav_password = "pass"
 
     #[test]
     fn derives_profile_work_dir() {
-        let config =
-            AppConfig::from_toml_str(&config_toml(&s3_profile_toml("docs"))).unwrap();
+        let config = parse(&config_toml(&s3_profile_toml("docs"))).unwrap();
         assert_eq!(
             config.profile_work_dir("docs"),
-            PathBuf::from("tmp/test-workdir/docs")
+            PathBuf::from("/tmp/test-workdir/docs")
         );
     }
 
     #[test]
-    fn rejects_config_without_work_dir() {
-        let err = parse_error(&s3_profile_toml("docs"));
-        assert!(
-            err.contains("work_dir"),
-            "expected work_dir error, got: {err}"
+    fn defaults_work_dir_to_config_dir() {
+        let config = parse(&s3_profile_toml("docs")).unwrap();
+        assert_eq!(
+            config.work_dir,
+            PathBuf::from("/tmp/test-config-dir/minisearch_workdir")
         );
+    }
+
+    #[test]
+    fn rejects_relative_work_dir() {
+        let err = parse_error(&format!("work_dir = \"relative/path\"\n{}", s3_profile_toml("docs")));
+        assert_eq!(err, "work_dir must be an absolute path, got: relative/path");
     }
 
     #[test]
     fn rejects_empty_work_dir() {
         let err = parse_error(&format!("work_dir = \"\"\n{}", s3_profile_toml("docs")));
-        assert_eq!(err, "work_dir must not be empty");
+        assert_eq!(err, "work_dir must be an absolute path, got: ");
     }
 
     #[test]
     fn rejects_config_without_profiles() {
-        let err = parse_error("work_dir = \"tmp/workdir\"");
+        let err = parse_error("work_dir = \"/tmp/workdir\"");
         assert_eq!(
             err,
             "config must contain at least one [[profiles]] entry"
@@ -330,27 +358,23 @@ webdav_password = "pass"
 
     #[test]
     fn rejects_s3_missing_fields() {
-        let toml = r#"
-work_dir = "tmp/workdir"
-[[profiles]]
+        let toml = format!("work_dir = \"/tmp/workdir\"\n{}", r#"[[profiles]]
 name = "bad"
 description = "missing s3 fields"
 backend = "s3"
-"#;
-        let err = parse_error(toml);
+"#);
+        let err = parse_error(&toml);
         assert!(err.contains("aws_access_key_id is required for s3 backend"));
     }
 
     #[test]
     fn rejects_webdav_missing_fields() {
-        let toml = r#"
-work_dir = "tmp/workdir"
-[[profiles]]
+        let toml = format!("work_dir = \"/tmp/workdir\"\n{}", r#"[[profiles]]
 name = "bad"
 description = "missing webdav fields"
 backend = "webdav"
-"#;
-        let err = parse_error(toml);
+"#);
+        let err = parse_error(&toml);
         assert!(err.contains("webdav_url is required for webdav backend"));
     }
 }

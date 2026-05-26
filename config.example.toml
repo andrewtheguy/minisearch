@@ -1,4 +1,6 @@
-work_dir = "./workdir"
+# Absolute path to the working directory for indexes and state.
+# If omitted, defaults to "minisearch_workdir" in the same directory as this config file.
+# work_dir = "/var/lib/minisearch/workdir"
 
 [[profiles]]
 name = "my-bucket"

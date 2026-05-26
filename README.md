@@ -51,10 +51,12 @@ bun install
 
 By default, minisearch looks for its config at `~/.config/minisearch/config.toml` (or `$XDG_CONFIG_HOME/minisearch/config.toml`). Override with `-c`/`--config` or the `MINISEARCH_CONFIG` env var.
 
-Create a TOML config file with one or more `[[profiles]]` entries. Each profile defines a name, description, backend type (`s3` or `webdav`), connection details, and a working directory:
+Create a TOML config file with one or more `[[profiles]]` entries. Each profile defines a name, description, backend type (`s3` or `webdav`), and connection details:
 
 ```toml
-work_dir = "./workdir"
+# Optional — absolute path to the working directory for indexes and state.
+# Defaults to "minisearch_workdir" in the same directory as this config file.
+# work_dir = "/var/lib/minisearch/workdir"
 
 # S3 backend
 [[profiles]]
@@ -77,7 +79,7 @@ webdav_username = "user"
 webdav_password = "pass"
 ```
 
-Profile names must be unique and contain only lowercase letters, digits, hyphens, and underscores. The top-level `work_dir` is the base working directory — each profile's data is stored under `<work_dir>/<profile_name>/`, with the Tantivy search index at `<work_dir>/<profile_name>/tantivy_index/` and indexer state at `<work_dir>/<profile_name>/state.json`.
+Profile names must be unique and contain only lowercase letters, digits, hyphens, and underscores. The optional top-level `work_dir` sets the base working directory (must be an absolute path; defaults to `minisearch_workdir` next to the config file). Each profile's data is stored under `<work_dir>/<profile_name>/`, with the Tantivy search index at `<work_dir>/<profile_name>/tantivy_index/` and indexer state at `<work_dir>/<profile_name>/state.json`.
 
 WebDAV profiles do not support presigned URLs, so file links in the MiniSearch UI are not clickable for WebDAV backends.
 
