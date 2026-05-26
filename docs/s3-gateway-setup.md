@@ -80,14 +80,21 @@ minisearch -c config.toml serve
 
 Open http://localhost:52378 to search your files.
 
-## Open file caveat
+## Live file consistency caveat
 
-S3 gateways serve files directly from the local filesystem. Files that are currently open or being written to by another process may cause issues:
+The gateway can be read-only to S3 clients, but read-only mode only rejects S3 write APIs. It does not stop other local processes from changing files under the served directory, and it does not make local-file reads snapshot-isolated.
 
-- **Indexing**: The indexer may read partial or inconsistent content from files that are actively being modified, leading to incomplete or corrupted index entries.
-- **Presigned URLs**: Downloading a file via a presigned URL while it is being written to may return truncated or mixed content.
+Behavior checked on 2026-05-26 against VersityGW v1.4.1 and rclone v1.74.2:
 
-For best results, avoid indexing or serving files that are actively being modified. If you need to index a directory with frequently changing files, consider running the indexer during a quiet period or pointing the gateway at a snapshot/copy of the data.
+- **VersityGW POSIX backend v1.4.1**: `ListObjectsV2` walks the local directory tree, `HeadObject` stats the local path, and `GetObject` stats and opens the local file before streaming it. It does not appear to lock files or retry when the file changes while it is being read. A file that is truncated, overwritten, or appended by another local process during indexing or download can therefore produce a partial, mixed, or failed read depending on filesystem behavior.
+- **rclone serve s3 v1.74.2**: The S3 server reads through rclone's VFS layer. `--read-only` prevents S3 clients from writing, but listings and object metadata can still be affected by the VFS directory cache, and direct local changes may not appear until the cache expires, is refreshed, or is invalidated. rclone's local backend has a `--local-no-check-updated` option for best-effort transfers of files that change during a read, especially append-only files, but that is not a general snapshot guarantee for arbitrary in-place modifications.
+
+MiniSearch itself is read-only against S3. Search results reflect the last completed index, while browse listings and presigned downloads read from the gateway at request time. If files can change while MiniSearch is indexing or while users are downloading them, prefer one of these patterns:
+
+- Write files to a temporary path, close them, then atomically rename them into the served tree.
+- Point the gateway at a filesystem snapshot or copy when building an index.
+- Run indexing during a quiet period and re-index after writers finish.
+- For rclone, keep `--vfs-cache-mode off` for the most direct reads, or set a short `--dir-cache-time` if faster visibility of new/deleted files matters. These settings improve freshness, not consistency of an actively modified file.
 
 ## Security notes
 
