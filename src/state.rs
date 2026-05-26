@@ -11,9 +11,9 @@ pub struct IndexState {
     pub bucket_id: Option<String>,
 }
 
-pub fn read_state(work_dir: &Path) -> Option<IndexState> {
+pub async fn read_state(work_dir: &Path) -> Option<IndexState> {
     let state_path = work_dir.join("state.json");
-    let contents = std::fs::read_to_string(&state_path).ok()?;
+    let contents = tokio::fs::read_to_string(&state_path).await.ok()?;
     serde_json::from_str::<IndexState>(&contents).ok()
 }
 

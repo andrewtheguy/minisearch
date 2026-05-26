@@ -128,7 +128,7 @@ async fn validate_bucket_id(
     bucket_name: &str,
     work_dir: &Path,
 ) -> anyhow::Result<Option<String>> {
-    let state = crate::state::read_state(work_dir);
+    let state = crate::state::read_state(work_dir).await;
     let state_exists = state.is_some();
     let local_id = state.as_ref().and_then(|s| s.bucket_id.as_deref());
 
