@@ -73,12 +73,12 @@ async fn main() -> anyhow::Result<()> {
                     Err(e) => Err(format!("failed to read state.json: {e}")),
                 };
 
-                println!("{}", profile.name);
-                println!("  description:  {}", profile.description);
-                println!("  index:        {}", if index_exists { "exists" } else { "not found" });
+                println!("profile:      {}", profile.name);
+                println!("description:  {}", profile.description);
+                println!("index:        {}", if index_exists { "exists" } else { "not found" });
                 match &last_indexed {
-                    Ok(ts) => println!("  last indexed: {ts}"),
-                    Err(msg) => println!("  last indexed: {msg}"),
+                    Ok(ts) => println!("last indexed: {ts}"),
+                    Err(msg) => println!("last indexed: {msg}"),
                 }
                 println!();
             }
