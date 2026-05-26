@@ -1,5 +1,5 @@
 import { Check, ClipboardCopy, Download, X } from "lucide-react";
-import { type FormEvent, useCallback, useEffect, useRef, useState } from "react";
+import { type FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Navigate, Route, Routes, useNavigate, useParams, useSearchParams } from "react-router";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
@@ -63,6 +63,8 @@ function formatBytes(bytes: number): string {
   const i = Math.floor(Math.log(bytes) / Math.log(k));
   return `${parseFloat((bytes / k ** i).toFixed(2))} ${sizes[i]}`;
 }
+
+const BROWSE_PAGE_SIZE = 200;
 
 const EXT_PRESETS: Record<string, string> = {
   code: "rs,py,go,java,kt,swift,c,h,cpp,hpp,cc,rb",
@@ -229,6 +231,7 @@ function BrowseView({ profileName, prefix }: { profileName: string; prefix: stri
   useEffect(() => {
     setBrowsePageIndex(0);
     setPageTokens([null]);
+    setLocalPage(1);
     fetchBrowsePage(null, 0);
     closePreview();
     return () => {
@@ -377,6 +380,24 @@ function BrowseView({ profileName, prefix }: { profileName: string; prefix: stri
       document.body.style.overflow = "";
     };
   }, [presignUrl, closePreview]);
+
+  // Client-side pagination for backends that return all items at once (WebDAV)
+  const [localPage, setLocalPage] = useState(1);
+  const allItems = useMemo(() => [...folders, ...files], [folders, files]);
+  const localTotalPages = isTruncated ? 0 : Math.ceil(allItems.length / BROWSE_PAGE_SIZE);
+  const useLocalPaging = !isTruncated && localTotalPages > 1;
+  const visibleFolders = useMemo(() => {
+    if (!useLocalPaging) return folders;
+    const start = (localPage - 1) * BROWSE_PAGE_SIZE;
+    const end = start + BROWSE_PAGE_SIZE;
+    return folders.slice(start, Math.min(end, folders.length));
+  }, [folders, localPage, useLocalPaging]);
+  const visibleFiles = useMemo(() => {
+    if (!useLocalPaging) return files;
+    const start = Math.max(0, (localPage - 1) * BROWSE_PAGE_SIZE - folders.length);
+    const end = start + BROWSE_PAGE_SIZE - visibleFolders.length;
+    return files.slice(start, Math.max(0, end));
+  }, [files, folders.length, visibleFolders.length, localPage, useLocalPaging]);
 
   const segments = prefix ? prefix.replace(/\/$/, "").split("/") : [];
   const isSearchActive = searchResults !== null || searching || searchError !== null;
@@ -626,9 +647,9 @@ function BrowseView({ profileName, prefix }: { profileName: string; prefix: stri
                 <p className="text-muted-foreground">This folder is empty.</p>
               )}
 
-              {folders.length > 0 && (
+              {visibleFolders.length > 0 && (
                 <div className="space-y-1 mb-4">
-                  {folders.map((folder) => (
+                  {visibleFolders.map((folder) => (
                     <button
                       key={folder.key}
                       type="button"
@@ -644,9 +665,9 @@ function BrowseView({ profileName, prefix }: { profileName: string; prefix: stri
                 </div>
               )}
 
-              {files.length > 0 && (
+              {visibleFiles.length > 0 && (
                 <div className="space-y-1">
-                  {files.map((file) => (
+                  {visibleFiles.map((file) => (
                     <button
                       key={file.key}
                       type="button"
@@ -664,6 +685,30 @@ function BrowseView({ profileName, prefix }: { profileName: string; prefix: stri
                     </button>
                   ))}
                 </div>
+              )}
+
+              {useLocalPaging && (
+                <nav className="flex items-center justify-center gap-2 pt-4">
+                  {getPageNumbers(localPage, localTotalPages).map((p, _i, arr) =>
+                    p === "ellipsis" ? (
+                      <span
+                        key={`ellipsis-${arr.indexOf(p) === _i ? "left" : "right"}`}
+                        className="text-muted-foreground px-1"
+                      >
+                        ...
+                      </span>
+                    ) : (
+                      <Button
+                        key={p}
+                        variant={p === localPage ? "default" : "outline"}
+                        size="sm"
+                        onClick={() => setLocalPage(p)}
+                      >
+                        {p}
+                      </Button>
+                    ),
+                  )}
+                </nav>
               )}
 
               {(browsePageIndex > 0 || isTruncated) && (
