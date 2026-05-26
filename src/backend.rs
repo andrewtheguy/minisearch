@@ -366,7 +366,9 @@ impl Backend {
     pub async fn get_stream(&self, key: &str) -> anyhow::Result<reqwest::Response> {
         match self {
             Backend::WebDav(client) => client.get_stream(key).await,
-            Backend::S3 { .. } => anyhow::bail!("get_stream not supported for S3 backend"),
+            Backend::S3 { .. } => anyhow::bail!(
+                "get_stream not supported for Backend::S3; use presign_url to obtain a presigned URL for S3 objects instead of the fetch proxy"
+            ),
         }
     }
 
