@@ -673,7 +673,12 @@ function BrowseView({ profileName, prefix }: { profileName: string; prefix: stri
 
 function RootRedirect() {
   const navigate = useNavigate();
-  useEffect(() => {
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  const doFetch = useCallback(() => {
+    setLoading(true);
+    setError(null);
     fetch("/api/default-profile")
       .then((res) => {
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
@@ -682,8 +687,39 @@ function RootRedirect() {
       .then((data) => {
         navigate(`/p/${data.name}/browse/`, { replace: true });
       })
-      .catch(() => {});
+      .catch((err) => {
+        setError(err instanceof Error ? err.message : String(err));
+        setLoading(false);
+      });
   }, [navigate]);
+
+  useEffect(() => {
+    doFetch();
+  }, [doFetch]);
+
+  if (error) {
+    return (
+      <div className="flex flex-col items-center justify-center min-h-screen gap-4">
+        <p className="text-red-600">Failed to load profile: {error}</p>
+        <button
+          type="button"
+          className="px-4 py-2 text-sm bg-gray-100 hover:bg-gray-200 rounded"
+          onClick={doFetch}
+        >
+          Retry
+        </button>
+      </div>
+    );
+  }
+
+  if (loading) {
+    return (
+      <div className="flex items-center justify-center min-h-screen">
+        <p className="text-gray-500">Loading...</p>
+      </div>
+    );
+  }
+
   return null;
 }
 
