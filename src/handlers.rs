@@ -537,8 +537,7 @@ async fn proxy_webdav_file(backend: &Backend, key: &str, download: bool) -> Resu
 
     let mut builder = axum::response::Response::builder()
         .header(header::CONTENT_TYPE, &content_type)
-        .header(header::CONTENT_DISPOSITION, content_disposition(key, download))
-        .header(header::X_CONTENT_TYPE_OPTIONS, "nosniff");
+        .header(header::CONTENT_DISPOSITION, content_disposition(key, download));
     if !download {
         builder = builder.header(header::CONTENT_SECURITY_POLICY, "sandbox");
     }
