@@ -10,9 +10,6 @@ pub enum AppError {
     #[error("{0}")]
     NotFound(String),
 
-    #[error("{0}")]
-    ServiceUnavailable(String),
-
     #[error(transparent)]
     Internal(#[from] anyhow::Error),
 }
@@ -26,9 +23,6 @@ impl AppError {
         Self::NotFound(msg.into())
     }
 
-    pub fn unavailable(msg: impl Into<String>) -> Self {
-        Self::ServiceUnavailable(msg.into())
-    }
 }
 
 impl IntoResponse for AppError {
@@ -36,7 +30,6 @@ impl IntoResponse for AppError {
         let (status, message) = match self {
             AppError::BadRequest(msg) => (StatusCode::BAD_REQUEST, msg),
             AppError::NotFound(msg) => (StatusCode::NOT_FOUND, msg),
-            AppError::ServiceUnavailable(msg) => (StatusCode::SERVICE_UNAVAILABLE, msg),
             AppError::Internal(err) => {
                 error!("internal error: {err:#}");
                 (
@@ -76,11 +69,6 @@ mod tests {
                 AppError::not_found("missing profile"),
                 StatusCode::NOT_FOUND,
                 "missing profile",
-            ),
-            (
-                AppError::unavailable("index unavailable"),
-                StatusCode::SERVICE_UNAVAILABLE,
-                "index unavailable",
             ),
         ];
 

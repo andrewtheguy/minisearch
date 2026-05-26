@@ -60,26 +60,12 @@ async fn main() -> anyhow::Result<()> {
                 let work_dir = config.profile_work_dir(&profile.name);
                 let index_path = work_dir.join(config::INDEX_DIR);
                 let index_exists = index_path.exists();
-                let state_path = work_dir.join("state.json");
-                let last_indexed = match std::fs::read_to_string(&state_path) {
-                    Ok(s) => match serde_json::from_str::<serde_json::Value>(&s) {
-                        Ok(v) => match v["last_indexed"].as_str() {
-                            Some(ts) => Ok(ts.to_string()),
-                            None => Err("state.json missing 'last_indexed' field".to_string()),
-                        },
-                        Err(e) => Err(format!("state.json parse error: {e}")),
-                    },
-                    Err(e) if e.kind() == std::io::ErrorKind::NotFound => Err("not indexed yet".to_string()),
-                    Err(e) => Err(format!("failed to read state.json: {e}")),
-                };
+                let last_indexed = state::read_last_indexed(&work_dir);
 
                 println!("profile:      {}", profile.name);
                 println!("description:  {}", profile.description);
                 println!("index:        {}", if index_exists { "exists" } else { "not found" });
-                match &last_indexed {
-                    Ok(ts) => println!("last indexed: {ts}"),
-                    Err(msg) => println!("last indexed: {msg}"),
-                }
+                println!("last indexed: {last_indexed}");
                 println!();
             }
         }
@@ -107,7 +93,7 @@ async fn main() -> anyhow::Result<()> {
                 .ok_or_else(|| anyhow::anyhow!("search index not found at {index_path:?} — run `minisearch index --profile {profile_name}` first"))?;
             let reader = index.reader().context("failed to create index reader")?;
             let schema = search::build_schema();
-            let search = Arc::new(RwLock::new(Some(SearchState { reader, schema })));
+            let search = Arc::new(RwLock::new(SearchState { reader, schema }));
             info!("search index loaded from {index_path:?}");
 
             let state = AppState {

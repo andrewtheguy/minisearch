@@ -201,7 +201,8 @@ function BrowseView({ profileName, prefix }: { profileName: string; prefix: stri
   }, [fetchBrowsePage]);
 
   useEffect(() => {
-    fetch(`/api/p/${profileName}/info`)
+    const controller = new AbortController();
+    fetch(`/api/p/${profileName}/info`, { signal: controller.signal })
       .then((res) =>
         res.ok
           ? (res.json() as Promise<{ name: string; description: string; last_indexed: string }>)
@@ -212,7 +213,11 @@ function BrowseView({ profileName, prefix }: { profileName: string; prefix: stri
           setProfileDescription(data.description);
           setLastIndexed(data.last_indexed);
         }
+      })
+      .catch((err) => {
+        if (err instanceof DOMException && err.name === "AbortError") return;
       });
+    return () => controller.abort();
   }, [profileName]);
 
   const doSearch = useCallback(

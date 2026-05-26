@@ -14,7 +14,6 @@ use tantivy::tokenizer::{TextAnalyzer, TokenStream};
 use tantivy::{TantivyDocument, Term};
 
 use crate::error::AppError;
-use crate::search;
 use crate::state::{AppState, ProfileState, SearchState};
 
 #[derive(Deserialize, Default, Clone, Copy)]
@@ -62,27 +61,8 @@ pub struct SearchSnippetSegment {
     pub end: usize,
 }
 
-fn get_or_init_search(state: &ProfileState) -> Result<SearchState, AppError> {
-    {
-        let guard = state.search.read().unwrap_or_else(|e| e.into_inner());
-        if let Some(s) = guard.as_ref() {
-            return Ok(s.clone());
-        }
-    }
-    let mut guard = state.search.write().unwrap_or_else(|e| e.into_inner());
-    if let Some(s) = guard.as_ref() {
-        return Ok(s.clone());
-    }
-    let index = search::open_index(&state.work_dir.join(crate::config::INDEX_DIR)).ok_or_else(|| {
-        AppError::unavailable("search index not available — run `minisearch index` first")
-    })?;
-    let reader = index
-        .reader()
-        .map_err(|e| AppError::Internal(anyhow::anyhow!(e).context("failed to create index reader")))?;
-    let schema = search::build_schema();
-    let search_state = SearchState { reader, schema };
-    *guard = Some(search_state.clone());
-    Ok(search_state)
+fn get_search(state: &ProfileState) -> SearchState {
+    state.search.read().unwrap_or_else(|e| e.into_inner()).clone()
 }
 
 pub async fn redirect_to_profile(
@@ -107,18 +87,7 @@ pub async fn profile_info(
         .get_profile(&profile_name)
         .ok_or_else(|| AppError::not_found(format!("profile not found: {profile_name}")))?;
 
-    let state_path = profile.state.work_dir.join("state.json");
-    let last_indexed = match std::fs::read_to_string(&state_path) {
-        Ok(s) => match serde_json::from_str::<serde_json::Value>(&s) {
-            Ok(v) => match v["last_indexed"].as_str() {
-                Some(ts) => ts.to_string(),
-                None => "state.json missing 'last_indexed' field".to_string(),
-            },
-            Err(e) => format!("state.json parse error: {e}"),
-        },
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => "not indexed yet".to_string(),
-        Err(e) => format!("failed to read state.json: {e}"),
-    };
+    let last_indexed = crate::state::read_last_indexed(&profile.state.work_dir);
 
     Ok(Json(ProfileInfoResponse {
         name: profile.name.clone(),
@@ -141,7 +110,7 @@ pub async fn search(
         .filter(|q| !q.trim().is_empty())
         .ok_or_else(|| AppError::bad_request("missing or empty query parameter 'q'"))?;
 
-    let search_state = get_or_init_search(&profile.state)?;
+    let search_state = get_search(&profile.state);
     let schema = &search_state.schema;
     let reader = &search_state.reader;
 
