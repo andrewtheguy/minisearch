@@ -6,6 +6,12 @@ use log::debug;
 
 use crate::webdav::WebDavClient;
 
+pub fn content_disposition(key: &str) -> String {
+    let filename = key.rsplit('/').next().unwrap_or(key);
+    let encoded = urlencoding::encode(filename);
+    format!("inline; filename*=UTF-8''{encoded}")
+}
+
 #[derive(Clone)]
 pub enum Backend {
     S3 {
@@ -51,7 +57,7 @@ impl Backend {
     }
 
     pub fn supports_presign(&self) -> bool {
-        matches!(self, Backend::S3 { .. })
+        true
     }
 
     pub async fn list_all_objects(&self) -> anyhow::Result<Vec<ObjectEntry>> {
@@ -346,7 +352,7 @@ impl Backend {
                     .bucket(bucket)
                     .key(key)
                     .response_content_type(&content_type)
-                    .response_content_disposition("inline")
+                    .response_content_disposition(content_disposition(key))
                     .presigned(presign_config)
                     .await
                     .context("presign failed")?;
@@ -354,6 +360,13 @@ impl Backend {
                 Ok(Some(presigned.uri().to_string()))
             }
             Backend::WebDav(_) => Ok(None),
+        }
+    }
+
+    pub async fn get_stream(&self, key: &str) -> anyhow::Result<reqwest::Response> {
+        match self {
+            Backend::WebDav(client) => client.get_stream(key).await,
+            Backend::S3 { .. } => anyhow::bail!("get_stream not supported for S3 backend"),
         }
     }
 

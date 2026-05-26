@@ -34,6 +34,7 @@ pub async fn read_last_indexed(work_dir: &Path) -> String {
 #[derive(Clone)]
 pub struct AppState {
     pub profile: ProfileEntry,
+    pub signing_secret: [u8; 32],
 }
 
 #[derive(Clone)]

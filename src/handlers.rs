@@ -1,18 +1,26 @@
 use std::collections::BTreeSet;
 use std::ops::Range;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::Context;
+use axum::body::Body;
 use axum::extract::{Path, Query, State};
+use axum::http::header;
 use axum::Json;
+use hmac::{Hmac, Mac};
 use serde::{Deserialize, Serialize};
+use sha2::Sha256;
 use tantivy::collector::{Count, TopDocs};
 use tantivy::query::{BooleanQuery, Occur, Query as TantivyQuery, QueryParser, RegexQuery, TermQuery};
 use tantivy::schema::{Field, IndexRecordOption, Value};
 use tantivy::tokenizer::{TextAnalyzer, TokenStream};
 use tantivy::{TantivyDocument, Term};
 
+use crate::backend::{Backend, content_disposition};
 use crate::error::AppError;
 use crate::state::{AppState, ProfileEntry, ProfileState, SearchState};
+
+type HmacSha256 = Hmac<Sha256>;
 
 #[derive(Deserialize, Default, Clone, Copy)]
 #[serde(rename_all = "lowercase")]
@@ -416,6 +424,22 @@ pub struct PresignParams {
     pub key: Option<String>,
 }
 
+fn generate_signed_url(profile_name: &str, key: &str, secret: &[u8; 32]) -> String {
+    let expires = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_secs()
+        + 3600;
+
+    let message = format!("{key}\n{expires}");
+    let mut mac = HmacSha256::new_from_slice(secret).unwrap();
+    mac.update(message.as_bytes());
+    let sig = hex::encode(mac.finalize().into_bytes());
+
+    let encoded_key = urlencoding::encode(key);
+    format!("/api/p/{profile_name}/fetch?key={encoded_key}&expires={expires}&sig={sig}")
+}
+
 pub async fn presign(
     State(state): State<AppState>,
     Path(profile_name): Path<String>,
@@ -428,15 +452,88 @@ pub async fn presign(
         .filter(|k| !k.trim().is_empty())
         .ok_or_else(|| AppError::bad_request("missing or empty query parameter 'key'"))?;
 
-    let url = profile
-        .state
-        .backend
-        .presign_url(&key)
-        .await
-        .context("presign failed")?
-        .ok_or_else(|| AppError::bad_request("presigned URLs are not supported for this backend"))?;
+    if let Some(url) = profile.state.backend.presign_url(&key).await.context("presign failed")? {
+        return Ok(axum::response::Redirect::temporary(&url));
+    }
 
+    let url = generate_signed_url(&profile_name, &key, &state.signing_secret);
     Ok(axum::response::Redirect::temporary(&url))
+}
+
+#[derive(Deserialize)]
+pub struct FetchParams {
+    pub key: Option<String>,
+    pub expires: Option<u64>,
+    pub sig: Option<String>,
+}
+
+pub async fn fetch(
+    State(state): State<AppState>,
+    Path(profile_name): Path<String>,
+    Query(params): Query<FetchParams>,
+) -> Result<axum::response::Response, AppError> {
+    let profile = get_profile(&state, &profile_name)?;
+
+    let key = params
+        .key
+        .filter(|k| !k.trim().is_empty())
+        .ok_or_else(|| AppError::bad_request("missing or empty 'key'"))?;
+    let expires = params
+        .expires
+        .ok_or_else(|| AppError::bad_request("missing 'expires'"))?;
+    let sig = params
+        .sig
+        .filter(|s| !s.trim().is_empty())
+        .ok_or_else(|| AppError::bad_request("missing 'sig'"))?;
+
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+    if now > expires {
+        return Err(AppError::bad_request("URL has expired"));
+    }
+
+    let message = format!("{key}\n{expires}");
+    let mut mac = HmacSha256::new_from_slice(&state.signing_secret).unwrap();
+    mac.update(message.as_bytes());
+    let sig_bytes =
+        hex::decode(&sig).map_err(|_| AppError::bad_request("invalid signature encoding"))?;
+    mac.verify_slice(&sig_bytes)
+        .map_err(|_| AppError::bad_request("invalid signature"))?;
+
+    proxy_webdav_file(&profile.state.backend, &key).await
+}
+
+async fn proxy_webdav_file(backend: &Backend, key: &str) -> Result<axum::response::Response, AppError> {
+    let resp = backend
+        .get_stream(key)
+        .await
+        .context("failed to fetch file from backend")?;
+
+    let content_type = resp
+        .headers()
+        .get("content-type")
+        .and_then(|v| v.to_str().ok())
+        .map(|s| s.to_string())
+        .unwrap_or_else(|| {
+            let mime = new_mime_guess::from_path(key).first_or_octet_stream();
+            if mime.type_() == "text" {
+                format!("{mime}; charset=utf-8")
+            } else {
+                mime.to_string()
+            }
+        });
+
+    let body = Body::from_stream(resp.bytes_stream());
+
+    let response = axum::response::Response::builder()
+        .header(header::CONTENT_TYPE, &content_type)
+        .header(header::CONTENT_DISPOSITION, content_disposition(key))
+        .body(body)
+        .context("failed to build response")?;
+
+    Ok(response)
 }
 
 #[derive(Deserialize)]

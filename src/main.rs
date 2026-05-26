@@ -16,6 +16,7 @@ use axum::{routing::get, Router};
 use clap::Parser;
 use cli::{Cli, Commands};
 use log::{error, info};
+use rand::Rng;
 use state::{AppState, ProfileEntry, ProfileState, SearchState};
 
 #[tokio::main]
@@ -99,6 +100,8 @@ async fn main() -> anyhow::Result<()> {
             let search = Arc::new(RwLock::new(SearchState { reader, schema }));
             info!("search index loaded from {index_path:?}");
 
+            let signing_secret: [u8; 32] = rand::rng().random();
+
             let state = AppState {
                 profile: ProfileEntry {
                     name: profile_config.name.clone(),
@@ -109,6 +112,7 @@ async fn main() -> anyhow::Result<()> {
                         search,
                     },
                 },
+                signing_secret,
             };
 
             let app = Router::new()
@@ -118,6 +122,7 @@ async fn main() -> anyhow::Result<()> {
                 .route("/api/p/{profile}/info", get(handlers::profile_info))
                 .route("/api/p/{profile}/search", get(handlers::search))
                 .route("/api/p/{profile}/presign", get(handlers::presign))
+                .route("/api/p/{profile}/fetch", get(handlers::fetch))
                 .route("/api/p/{profile}/browse", get(handlers::browse))
                 .with_state(state)
                 .fallback(assets::static_handler);
