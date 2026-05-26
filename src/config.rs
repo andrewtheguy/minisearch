@@ -1,5 +1,7 @@
 use std::collections::HashSet;
-use std::path::Path;
+use std::path::{Path, PathBuf};
+
+pub const INDEX_DIR: &str = "tantivy_index";
 
 use anyhow::{bail, Context};
 use aws_sdk_s3::config::Credentials;
@@ -13,7 +15,6 @@ pub struct ProfileConfig {
     pub aws_region: String,
     pub aws_endpoint_url: String,
     pub s3_bucket_name: String,
-    pub tantivy_index_path: String,
 }
 
 impl ProfileConfig {
@@ -37,11 +38,16 @@ impl ProfileConfig {
 
 #[derive(serde::Deserialize)]
 pub struct AppConfig {
+    pub work_dir: String,
     #[serde(default)]
     pub profiles: Vec<ProfileConfig>,
 }
 
 impl AppConfig {
+    pub fn profile_work_dir(&self, profile_name: &str) -> PathBuf {
+        PathBuf::from(&self.work_dir).join(profile_name)
+    }
+
     pub fn load(path: &Path) -> anyhow::Result<Self> {
         let contents = std::fs::read_to_string(path)
             .with_context(|| format!("failed to read config file: {}", path.display()))?;
@@ -60,6 +66,9 @@ impl AppConfig {
     }
 
     fn validate(&self) -> anyhow::Result<()> {
+        if self.work_dir.is_empty() {
+            bail!("work_dir must not be empty");
+        }
         if self.profiles.is_empty() {
             bail!("config must contain at least one [[profiles]] entry");
         }
@@ -103,9 +112,12 @@ aws_secret_access_key = "secret"
 aws_region = "us-east-1"
 aws_endpoint_url = "http://localhost:9000"
 s3_bucket_name = "bucket"
-tantivy_index_path = "tmp/test-index-{name}"
 "#
         )
+    }
+
+    fn config_toml(profiles: &str) -> String {
+        format!("work_dir = \"tmp/test-workdir\"\n{profiles}")
     }
 
     fn parse_error(contents: &str) -> String {
@@ -117,11 +129,11 @@ tantivy_index_path = "tmp/test-index-{name}"
 
     #[test]
     fn parses_valid_profiles() {
-        let config = AppConfig::from_toml_str(&format!(
+        let config = AppConfig::from_toml_str(&config_toml(&format!(
             "{}{}",
             profile_toml("docs"),
             profile_toml("media_2026")
-        ))
+        )))
         .unwrap();
 
         assert_eq!(config.profiles.len(), 2);
@@ -130,8 +142,32 @@ tantivy_index_path = "tmp/test-index-{name}"
     }
 
     #[test]
+    fn derives_profile_work_dir() {
+        let config = AppConfig::from_toml_str(&config_toml(&profile_toml("docs"))).unwrap();
+
+        assert_eq!(
+            config.profile_work_dir("docs"),
+            PathBuf::from("tmp/test-workdir/docs")
+        );
+    }
+
+    #[test]
+    fn rejects_config_without_work_dir() {
+        let err = parse_error(&profile_toml("docs"));
+
+        assert!(err.contains("work_dir"), "expected work_dir error, got: {err}");
+    }
+
+    #[test]
+    fn rejects_empty_work_dir() {
+        let err = parse_error(&format!("work_dir = \"\"\n{}", profile_toml("docs")));
+
+        assert_eq!(err, "work_dir must not be empty");
+    }
+
+    #[test]
     fn rejects_config_without_profiles() {
-        let err = parse_error("");
+        let err = parse_error("work_dir = \"tmp/workdir\"");
 
         assert_eq!(
             err,
@@ -141,14 +177,14 @@ tantivy_index_path = "tmp/test-index-{name}"
 
     #[test]
     fn rejects_empty_profile_name() {
-        let err = parse_error(&profile_toml(""));
+        let err = parse_error(&config_toml(&profile_toml("")));
 
         assert_eq!(err, "profile name must not be empty");
     }
 
     #[test]
     fn rejects_invalid_profile_name() {
-        let err = parse_error(&profile_toml("Docs"));
+        let err = parse_error(&config_toml(&profile_toml("Docs")));
 
         assert_eq!(
             err,
@@ -158,11 +194,11 @@ tantivy_index_path = "tmp/test-index-{name}"
 
     #[test]
     fn rejects_duplicate_profile_names() {
-        let contents = format!(
+        let contents = config_toml(&format!(
             "{}{}",
             profile_toml("docs"),
             profile_toml("docs")
-        );
+        ));
         let err = parse_error(&contents);
 
         assert_eq!(err, "duplicate profile name: 'docs'");

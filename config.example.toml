@@ -1,3 +1,5 @@
+work_dir = "./workdir"
+
 [[profiles]]
 name = "my-bucket"
 description = "My S3 bucket files"
@@ -6,4 +8,3 @@ aws_secret_access_key = "your-secret-key"
 aws_region = "us-east-1"
 aws_endpoint_url = "https://your-s3-endpoint.example.com"
 s3_bucket_name = "your-bucket"
-tantivy_index_path = "./tantivy_index/my-bucket"

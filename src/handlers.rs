@@ -14,8 +14,7 @@ use tantivy::tokenizer::{TextAnalyzer, TokenStream};
 use tantivy::{TantivyDocument, Term};
 
 use crate::error::AppError;
-use crate::search;
-use crate::state::{AppState, ProfileState, SearchState};
+use crate::state::{AppState, ProfileEntry, ProfileState, SearchState};
 
 #[derive(Deserialize, Default, Clone, Copy)]
 #[serde(rename_all = "lowercase")]
@@ -62,48 +61,44 @@ pub struct SearchSnippetSegment {
     pub end: usize,
 }
 
-fn get_or_init_search(state: &ProfileState) -> Result<SearchState, AppError> {
-    {
-        let guard = state.search.read().unwrap_or_else(|e| e.into_inner());
-        if let Some(s) = guard.as_ref() {
-            return Ok(s.clone());
-        }
+fn get_search(state: &ProfileState) -> SearchState {
+    state.search.read().unwrap_or_else(|e| e.into_inner()).clone()
+}
+
+fn get_profile<'a>(state: &'a AppState, name: &str) -> Result<&'a ProfileEntry, AppError> {
+    if state.profile.name == name {
+        Ok(&state.profile)
+    } else {
+        Err(AppError::not_found(format!("profile not found: {name}")))
     }
-    let mut guard = state.search.write().unwrap_or_else(|e| e.into_inner());
-    if let Some(s) = guard.as_ref() {
-        return Ok(s.clone());
-    }
-    let index = search::open_index(&state.index_path).ok_or_else(|| {
-        AppError::unavailable("search index not available — run `minisearch index` first")
-    })?;
-    let reader = index
-        .reader()
-        .map_err(|e| AppError::Internal(anyhow::anyhow!(e).context("failed to create index reader")))?;
-    let schema = search::build_schema();
-    let search_state = SearchState { reader, schema };
-    *guard = Some(search_state.clone());
-    Ok(search_state)
+}
+
+pub async fn redirect_to_profile(
+    State(state): State<AppState>,
+) -> axum::response::Redirect {
+    axum::response::Redirect::temporary(&format!("/p/{}/browse/", state.profile.name))
 }
 
 #[derive(Serialize)]
-pub struct ProfileInfo {
+pub struct ProfileInfoResponse {
     pub name: String,
     pub description: String,
+    pub last_indexed: String,
 }
 
-pub async fn profiles(
+pub async fn profile_info(
     State(state): State<AppState>,
-) -> Json<Vec<ProfileInfo>> {
-    Json(
-        state
-            .profiles
-            .iter()
-            .map(|p| ProfileInfo {
-                name: p.name.clone(),
-                description: p.description.clone(),
-            })
-            .collect(),
-    )
+    Path(profile_name): Path<String>,
+) -> Result<Json<ProfileInfoResponse>, AppError> {
+    let profile = get_profile(&state, &profile_name)?;
+
+    let last_indexed = crate::state::read_last_indexed(&profile.state.work_dir).await;
+
+    Ok(Json(ProfileInfoResponse {
+        name: profile.name.clone(),
+        description: profile.description.clone(),
+        last_indexed,
+    }))
 }
 
 pub async fn search(
@@ -111,16 +106,14 @@ pub async fn search(
     Path(profile_name): Path<String>,
     Query(params): Query<SearchParams>,
 ) -> Result<Json<SearchResponse>, AppError> {
-    let profile = state
-        .get_profile(&profile_name)
-        .ok_or_else(|| AppError::not_found(format!("profile not found: {profile_name}")))?;
+    let profile = get_profile(&state, &profile_name)?;
 
     let query_str = params
         .q
         .filter(|q| !q.trim().is_empty())
         .ok_or_else(|| AppError::bad_request("missing or empty query parameter 'q'"))?;
 
-    let search_state = get_or_init_search(&profile.state)?;
+    let search_state = get_search(&profile.state);
     let schema = &search_state.schema;
     let reader = &search_state.reader;
 
@@ -494,9 +487,7 @@ pub async fn presign(
     Path(profile_name): Path<String>,
     Query(params): Query<PresignParams>,
 ) -> Result<axum::response::Redirect, AppError> {
-    let profile = state
-        .get_profile(&profile_name)
-        .ok_or_else(|| AppError::not_found(format!("profile not found: {profile_name}")))?;
+    let profile = get_profile(&state, &profile_name)?;
 
     let key = params
         .key
@@ -562,9 +553,7 @@ pub async fn browse(
     Path(profile_name): Path<String>,
     Query(params): Query<BrowseParams>,
 ) -> Result<Json<BrowseResponse>, AppError> {
-    let profile = state
-        .get_profile(&profile_name)
-        .ok_or_else(|| AppError::not_found(format!("profile not found: {profile_name}")))?;
+    let profile = get_profile(&state, &profile_name)?;
 
     let prefix = params.prefix.unwrap_or_default();
 

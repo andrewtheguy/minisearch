@@ -27,7 +27,15 @@ pub struct Cli {
 #[derive(Subcommand)]
 pub enum Commands {
     /// Start the web server
-    Serve,
+    Serve {
+        /// Profile name to serve
+        #[arg(short, long)]
+        profile: String,
+
+        /// Port to listen on
+        #[arg(long, default_value_t = 52378)]
+        port: u16,
+    },
     /// Index S3 bucket contents into Tantivy
     Index {
         /// Profile name to index
@@ -37,6 +45,12 @@ pub enum Commands {
         /// Run periodically (e.g. 30m, 1h, 2h30m)
         #[arg(long, value_parser = parse_duration)]
         every: Option<Duration>,
+    },
+    /// Show profile status (index state, last indexed time)
+    Status {
+        /// Profile name (shows all profiles if omitted)
+        #[arg(short, long)]
+        profile: Option<String>,
     },
 }
 

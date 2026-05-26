@@ -1,6 +1,8 @@
 # Using MiniSearch with an S3 Gateway
 
-Index and search files on a local filesystem by fronting them with an S3-compatible gateway. MiniSearch only performs read-only S3 operations (ListObjectsV2, HeadObject, GetObject, presigned GET), so the gateway never needs write permissions.
+MiniSearch is designed for real S3 buckets, where object storage guarantees read-after-write consistency and objects are immutable once written. It can also be used creatively to index and search other sources — such as a local filesystem fronted by an S3-compatible gateway — with the caveat that file consistency depends on the gateway and underlying storage (see [Live file consistency caveat](#live-file-consistency-caveat) below).
+
+MiniSearch only performs read-only S3 operations (ListObjectsV2, HeadObject, GetObject, presigned GET), so the gateway never needs write permissions.
 
 This guide covers [VersityGW](https://github.com/versity/versitygw) and [rclone serve s3](https://rclone.org/commands/rclone_serve_s3/), but any S3-compatible gateway works.
 
@@ -72,22 +74,29 @@ tantivy_index_path = "./tantivy_index/documents"
 
 ```bash
 # Build the search index
-minisearch -c config.toml index
+minisearch -c config.toml index --profile documents
 
 # Start the web server
-minisearch -c config.toml serve
+minisearch -c config.toml serve --profile documents
 ```
 
 Open http://localhost:52378 to search your files.
 
-## Open file caveat
+## Live file consistency caveat
 
-S3 gateways serve files directly from the local filesystem. Files that are currently open or being written to by another process may cause issues:
+The gateway can be read-only to S3 clients, but read-only mode only rejects S3 write APIs. It does not stop other local processes from changing files under the served directory, and it does not make local-file reads snapshot-isolated.
 
-- **Indexing**: The indexer may read partial or inconsistent content from files that are actively being modified, leading to incomplete or corrupted index entries.
-- **Presigned URLs**: Downloading a file via a presigned URL while it is being written to may return truncated or mixed content.
+Behavior checked against VersityGW v1.4.1 and rclone v1.74.2:
 
-For best results, avoid indexing or serving files that are actively being modified. If you need to index a directory with frequently changing files, consider running the indexer during a quiet period or pointing the gateway at a snapshot/copy of the data.
+- **VersityGW POSIX backend v1.4.1**: `ListObjectsV2` walks the local directory tree via `os.DirFS` + `backend.Walk`. `HeadObject` stats the local path (`os.Stat`). `GetObject` stats the path, opens the file (`os.Open`), then stats the open file descriptor to read size and modtime before streaming the body. None of these operations lock the file or retry when it changes mid-read. A file that is truncated, overwritten, or appended by another local process during indexing or download can therefore produce a partial, mixed, or failed read depending on filesystem behavior.
+- **rclone serve s3 v1.74.2**: The S3 server reads through rclone's VFS layer backed by gofakes3. `GetObject` opens files read-only through VFS (`file.Open(os.O_RDONLY)`) and streams the handle; `HeadObject` only calls `vfs.Stat`. `--read-only` is a VFS-level flag that prevents S3 clients from writing, but listings and object metadata are still subject to the VFS directory cache (`--dir-cache-time`, default 5 minutes), so direct local changes may not appear until the cache expires or is refreshed. rclone's local backend has a `--local-no-check-updated` option that suppresses the "source file is being updated" abort and instead reads exactly the originally recorded size — useful for append-only files, but not a snapshot guarantee for arbitrary in-place modifications.
+
+MiniSearch itself is read-only against S3. Search results reflect the last completed index, while browse listings and presigned downloads read from the gateway at request time. If files can change while MiniSearch is indexing or while users are downloading them, prefer one of these patterns:
+
+- Write files to a temporary path, close them, then atomically rename them into the served tree.
+- Point the gateway at a filesystem snapshot or copy when building an index.
+- Run indexing during a quiet period and re-index after writers finish.
+- For rclone, keep `--vfs-cache-mode off` for the most direct reads, or set a short `--dir-cache-time` if faster visibility of new/deleted files matters. These settings improve freshness, not consistency of an actively modified file.
 
 ## Security notes
 
@@ -100,6 +109,7 @@ For best results, avoid indexing or serving files that are actively being modifi
 
 | Error | Cause | Fix |
 |---|---|---|
-| `failed to list S3 objects` | Gateway not running or bucket does not exist | Verify the gateway is running and the subdirectory matching your bucket name exists |
-| `search index not available` (503) | Index not built yet | Run `minisearch -c config.toml index` before serving |
+| `failed to connect to S3 bucket '{name}'` on startup | Gateway not running, bucket does not exist, or wrong credentials | Verify the gateway is running, the subdirectory matching your bucket name exists, and the access/secret keys match |
+| `search index not found at {path} — run 'minisearch index ...' first` | Server won't start without an index | Run `minisearch -c config.toml index --profile <name>` before serving |
+| `failed to list S3 objects` during browse or indexing | Gateway became unreachable or bucket was removed after startup | Check that the gateway is still running and the bucket directory still exists |
 | Presigned URLs return errors in the browser | Gateway not reachable from the browser | Ensure the endpoint URL is reachable from the client machine |

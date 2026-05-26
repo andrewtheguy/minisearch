@@ -1,6 +1,6 @@
 # Architecture
 
-MiniSearch is a full-text search application for S3 objects. It indexes file contents and metadata from S3-compatible buckets into [Tantivy](https://github.com/quickwit-oss/tantivy) search indices, then serves a web UI for querying and browsing results. Multiple named profiles allow searching across different S3 buckets from a single instance.
+MiniSearch is a full-text search application for S3 objects. It indexes file contents and metadata from S3-compatible buckets into [Tantivy](https://github.com/quickwit-oss/tantivy) search indices, then serves a web UI for querying and browsing results. The server runs a single profile at a time, validating S3 connectivity and the search index on startup.
 
 ## High-level overview
 
@@ -31,10 +31,11 @@ The application ships as a single binary. The React frontend is compiled and emb
 
 ## CLI modes
 
-The binary has two subcommands:
+The binary has three subcommands:
 
 - **`index`** — Scans an S3 bucket, downloads text files, and builds/updates the Tantivy index on disk. Requires a `--profile` flag to specify which profile to index.
-- **`serve`** — Starts the Axum web server on port 52378, serving the API and embedded frontend.
+- **`serve`** — Starts the Axum web server on port 52378 for a single profile. Requires `--profile` flag. Validates S3 connectivity and search index on startup.
+- **`status`** — Shows profile status: name, description, whether the index exists, and last indexed time. Accepts optional `--profile` to filter to a single profile.
 
 Configuration is loaded from a TOML file (`-c`/`--config` flag or `MINISEARCH_CONFIG` env var).
 
@@ -65,7 +66,7 @@ Configuration is loaded from a TOML file (`-c`/`--config` flag or `MINISEARCH_CO
 
 The [Jieba](https://github.com/nickel-org/tantivy-jieba) tokenizer handles both Chinese and English text segmentation.
 
-Each profile's index is stored at the path specified by `tantivy_index_path` in its config entry.
+Each profile's working directory is derived as `<work_dir>/<profile_name>/` (where `work_dir` is the top-level config setting). The Tantivy index is stored under `<work_dir>/<profile_name>/tantivy_index/`. After a successful indexing run, the indexer writes `<work_dir>/<profile_name>/state.json` with a `last_indexed` timestamp.
 
 ### Indexing pipeline
 
@@ -80,7 +81,7 @@ Each profile's index is stored at the path specified by `tantivy_index_path` in 
 
 | Path | Description |
 |---|---|
-| `/` | Profile list — shows all configured profiles with descriptions |
+| `/` | Redirects to `/p/<name>/browse/` (server-side) |
 | `/p/<name>` | Redirects to `/p/<name>/browse/` |
 | `/p/<name>/browse/*` | Browse and search UI — S3 folder browser with inline search |
 
@@ -88,7 +89,8 @@ Each profile's index is stored at the path specified by `tantivy_index_path` in 
 
 | Endpoint | Method | Success Response | Errors |
 |---|---|---|---|
-| `/api/profiles` | GET | JSON array of `{ name, description }` for each profile | - |
+| `/` | GET | Redirects to `/p/:profile/browse/` | - |
+| `/api/p/:profile/info` | GET | JSON `{ name, description, last_indexed }` — `last_indexed` is read from `state.json` and contains either an ISO 8601 timestamp or a status message (e.g. "not indexed yet") | `404` for unknown profile |
 | `/api/p/:profile/search?q=&prefix=` | GET | JSON search results with structured snippet text segments, byte offsets, and highlight flags. Optional `prefix` scopes results to keys under that S3 prefix. | `400` for missing/invalid query; `404` for unknown profile; `503` when no index exists; `500` generic "internal server error" (details logged server-side) |
 | `/api/p/:profile/browse?prefix=&continuation_token=` | GET | JSON listing of folders and files at the given S3 prefix | `404` for unknown profile; `500` generic "internal server error" (details logged server-side) |
 | `/api/p/:profile/presign?key=` | GET | Temporary redirect to a time-limited S3 presigned URL | `400` for missing key; `404` for unknown profile; `500` generic "internal server error" (details logged server-side) |
@@ -160,14 +162,14 @@ AppState
          └── state: ProfileState
              ├── s3_client: aws_sdk_s3::Client
              ├── bucket_name: String
-             ├── index_path: PathBuf
+             ├── work_dir: PathBuf
              └── search: Arc<RwLock<Option<SearchState>>>
                   └── SearchState
                       ├── reader: IndexReader
                       └── schema: SearchSchema
 ```
 
-The search reader is lazily initialized on first query per profile. This allows the server to start even if no index has been built yet (returns 503 until ready).
+The search index and S3 connectivity are validated on startup. The server refuses to start if the index doesn't exist or S3 is unreachable.
 
 ### Error handling
 
@@ -192,7 +194,7 @@ The search reader is lazily initialized on first query per profile. This allows 
 
 ### Key behaviors
 
-- **Profile routing**: root path (`/`) shows a list of all configured profiles; `/p/<name>` redirects to `/p/<name>/browse/`.
+- **Profile routing**: root path (`/`) redirects to `/p/<name>/browse/` (server-side). The header displays the profile name, description, and last indexed time from `/api/p/<name>/info`.
 - **Browse view**: the default view is an S3 folder browser with breadcrumb navigation. Folders are navigable via URL path segments (`/p/<name>/browse/transcripts/rthk-radio1/`). Clicking a file opens it in a new window via the presign endpoint. Uses S3's default batch size (1000 items per page) with Previous/Next navigation via continuation tokens.
 - **Inline search**: a search bar is always visible above the browse listing. Submitting a search replaces the folder listing with search results inline (scoped to the current prefix); a "Clear" button returns to browse mode. Search state (`q`, `page`, `mode`, `ext`) is synced to URL query parameters.
 - **Request cancellation**: uses `AbortController` to cancel in-flight searches and browse requests.
@@ -214,7 +216,7 @@ The frontend is built first, then `rust-embed` bundles the `frontend/dist/` dire
 
 ```bash
 # Backend (port 52378)
-cargo run -- -c config.toml serve
+cargo run -- -c config.toml serve --profile my-bucket
 
 # Frontend dev server (port 5173, proxies /api to :52378)
 cd frontend && bun run dev
@@ -229,9 +231,11 @@ GitHub Actions builds release binaries for:
 
 ### Configuration
 
-All configuration is in a single TOML file with `[[profiles]]` array entries:
+All configuration is in a single TOML file with a top-level `work_dir` and `[[profiles]]` array entries:
 
 ```toml
+work_dir = "./workdir"
+
 [[profiles]]
 name = "my-bucket"
 description = "My S3 bucket files"
@@ -240,10 +244,9 @@ aws_secret_access_key = "..."
 aws_region = "us-east-1"
 aws_endpoint_url = "https://s3.amazonaws.com"
 s3_bucket_name = "my-bucket"
-tantivy_index_path = "./tantivy_index/my-bucket"
 ```
 
-Profile names must be unique and URL-safe (lowercase letters, digits, hyphens, underscores).
+Profile names must be unique and URL-safe (lowercase letters, digits, hyphens, underscores). Each profile's working directory is derived as `<work_dir>/<profile_name>/`.
 
 ## Deployment patterns
 

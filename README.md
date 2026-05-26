@@ -51,9 +51,11 @@ bun install
 
 By default, minisearch looks for its config at `~/.config/minisearch/config.toml` (or `$XDG_CONFIG_HOME/minisearch/config.toml`). Override with `-c`/`--config` or the `MINISEARCH_CONFIG` env var.
 
-Create a TOML config file with one or more `[[profiles]]` entries. Each profile defines a name, description, S3 connection details, and a unique Tantivy index path:
+Create a TOML config file with one or more `[[profiles]]` entries. Each profile defines a name, description, S3 connection details, and a working directory:
 
 ```toml
+work_dir = "./workdir"
+
 [[profiles]]
 name = "my-bucket"
 description = "My S3 bucket files"
@@ -62,27 +64,31 @@ aws_secret_access_key = "your-secret-key"
 aws_region = "us-east-1"
 aws_endpoint_url = "https://your-s3-endpoint.example.com"
 s3_bucket_name = "your-bucket"
-tantivy_index_path = "./tantivy_index/my-bucket"
 ```
 
-Profile names must be unique and contain only lowercase letters, digits, hyphens, and underscores. The `tantivy_index_path` is used directly as the index directory — ensure each profile has a unique path.
+Profile names must be unique and contain only lowercase letters, digits, hyphens, and underscores. The top-level `work_dir` is the base working directory — each profile's data is stored under `<work_dir>/<profile_name>/`, with the Tantivy search index at `<work_dir>/<profile_name>/tantivy_index/` and indexer state at `<work_dir>/<profile_name>/state.json`.
 
 ## Usage
 
-The binary has two subcommands:
+The binary has three subcommands:
 
 ```bash
+# Show profile status (index state, last indexed time)
+minisearch status
+
 # Build the search index for a profile
 minisearch index --profile my-bucket
 
-# Start the web server (port 52378)
-minisearch serve
+# Start the web server for a profile (port 52378)
+minisearch serve --profile my-bucket
 
 # Or with an explicit config file
-minisearch -c /path/to/config.toml serve
+minisearch -c /path/to/config.toml serve --profile my-bucket
 ```
 
-Run `index` first to download and index all files from the S3 bucket, then `serve` to start the web UI. The default view is an S3 folder browser at `/p/<profile>/browse/` with a search bar for full-text search scoped to the current folder. The server works without an index (browsing works, search returns 503), so you can start serving immediately while building the index separately.
+Run `index` first to download and index all files from the S3 bucket, then `serve` to start the web UI. The server validates S3 connectivity and the search index on startup — if either is unavailable, it fails immediately with a clear error. The home page redirects to `/p/<profile>/browse/` which shows an S3 folder browser with full-text search scoped to the current folder.
+
+The server binds to localhost only (`127.0.0.1` and `[::1]`) and is not accessible from other machines. Use `--port` to change the port (default: 52378). To expose it externally, put it behind a reverse proxy.
 
 ## Development
 
@@ -90,7 +96,7 @@ Start the backend and frontend dev server in separate terminals:
 
 ```bash
 # Terminal 1 — backend (port 52378)
-cargo run -- -c tmp/config.toml serve
+cargo run -- -c tmp/config.toml serve --profile radio-show
 
 # Terminal 2 — frontend (port 5173, proxies API to backend)
 cd frontend
