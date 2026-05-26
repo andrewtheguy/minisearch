@@ -6,10 +6,11 @@ use log::debug;
 
 use crate::webdav::WebDavClient;
 
-pub fn content_disposition(key: &str) -> String {
+pub fn content_disposition(key: &str, download: bool) -> String {
     let filename = key.rsplit('/').next().unwrap_or(key);
     let encoded = urlencoding::encode(filename);
-    format!("inline; filename*=UTF-8''{encoded}")
+    let disposition = if download { "attachment" } else { "inline" };
+    format!("{disposition}; filename*=UTF-8''{encoded}")
 }
 
 #[derive(Clone)]
@@ -334,7 +335,7 @@ impl Backend {
         }
     }
 
-    pub async fn presign_url(&self, key: &str) -> anyhow::Result<Option<String>> {
+    pub async fn presign_url(&self, key: &str, download: bool) -> anyhow::Result<Option<String>> {
         match self {
             Backend::S3 { client, bucket } => {
                 let mime = new_mime_guess::from_path(key).first_or_octet_stream();
@@ -352,7 +353,7 @@ impl Backend {
                     .bucket(bucket)
                     .key(key)
                     .response_content_type(&content_type)
-                    .response_content_disposition(content_disposition(key))
+                    .response_content_disposition(content_disposition(key, download))
                     .presigned(presign_config)
                     .await
                     .context("presign failed")?;

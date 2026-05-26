@@ -422,9 +422,11 @@ fn snippet_segments(fragment: &str, ranges: &[Range<usize>]) -> Vec<SearchSnippe
 #[derive(Deserialize)]
 pub struct PresignParams {
     pub key: Option<String>,
+    #[serde(default)]
+    pub download: bool,
 }
 
-fn generate_signed_url(profile_name: &str, key: &str, secret: &[u8; 32]) -> String {
+fn generate_signed_url(profile_name: &str, key: &str, secret: &[u8; 32], download: bool) -> String {
     let expires = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap()
@@ -437,7 +439,8 @@ fn generate_signed_url(profile_name: &str, key: &str, secret: &[u8; 32]) -> Stri
     let sig = hex::encode(mac.finalize().into_bytes());
 
     let encoded_key = urlencoding::encode(key);
-    format!("/api/p/{profile_name}/fetch?key={encoded_key}&expires={expires}&sig={sig}")
+    let dl = if download { "&download=true" } else { "" };
+    format!("/api/p/{profile_name}/fetch?key={encoded_key}&expires={expires}&sig={sig}{dl}")
 }
 
 pub async fn presign(
@@ -452,11 +455,13 @@ pub async fn presign(
         .filter(|k| !k.trim().is_empty())
         .ok_or_else(|| AppError::bad_request("missing or empty query parameter 'key'"))?;
 
-    if let Some(url) = profile.state.backend.presign_url(&key).await.context("presign failed")? {
+    let download = params.download;
+
+    if let Some(url) = profile.state.backend.presign_url(&key, download).await.context("presign failed")? {
         return Ok(axum::response::Redirect::temporary(&url));
     }
 
-    let url = generate_signed_url(&profile_name, &key, &state.signing_secret);
+    let url = generate_signed_url(&profile_name, &key, &state.signing_secret, download);
     Ok(axum::response::Redirect::temporary(&url))
 }
 
@@ -465,6 +470,8 @@ pub struct FetchParams {
     pub key: Option<String>,
     pub expires: Option<u64>,
     pub sig: Option<String>,
+    #[serde(default)]
+    pub download: bool,
 }
 
 pub async fn fetch(
@@ -502,10 +509,10 @@ pub async fn fetch(
     mac.verify_slice(&sig_bytes)
         .map_err(|_| AppError::bad_request("invalid signature"))?;
 
-    proxy_webdav_file(&profile.state.backend, &key).await
+    proxy_webdav_file(&profile.state.backend, &key, params.download).await
 }
 
-async fn proxy_webdav_file(backend: &Backend, key: &str) -> Result<axum::response::Response, AppError> {
+async fn proxy_webdav_file(backend: &Backend, key: &str, download: bool) -> Result<axum::response::Response, AppError> {
     let resp = backend
         .get_stream(key)
         .await
@@ -529,7 +536,7 @@ async fn proxy_webdav_file(backend: &Backend, key: &str) -> Result<axum::respons
 
     let response = axum::response::Response::builder()
         .header(header::CONTENT_TYPE, &content_type)
-        .header(header::CONTENT_DISPOSITION, content_disposition(key))
+        .header(header::CONTENT_DISPOSITION, content_disposition(key, download))
         .body(body)
         .context("failed to build response")?;
 

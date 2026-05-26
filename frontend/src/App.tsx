@@ -1,4 +1,4 @@
-import { ArrowLeft, ExternalLink, X } from "lucide-react";
+import { ClipboardCopy, Download, X } from "lucide-react";
 import { type FormEvent, useCallback, useEffect, useRef, useState } from "react";
 import { Navigate, Route, Routes, useNavigate, useParams, useSearchParams } from "react-router";
 import { Alert, AlertDescription } from "@/components/ui/alert";
@@ -352,370 +352,371 @@ function BrowseView({ profileName, prefix }: { profileName: string; prefix: stri
   const isSearchActive = searchResults !== null;
 
   return (
-    <div className="flex h-screen">
-      <div
-        className={
-          previewUrl
-            ? "hidden lg:block lg:w-1/2 lg:min-w-[400px] overflow-y-auto border-r border-border px-4 py-8"
-            : "mx-auto max-w-4xl w-full px-4 py-8 overflow-y-auto"
-        }
-      >
-        <div className="mb-6">
-          <div className="flex items-baseline gap-3">
-            <h1 className="text-3xl font-bold tracking-tight">{profileName}</h1>
-            {profileDescription && (
-              <span className="text-muted-foreground">{profileDescription}</span>
-            )}
-          </div>
-          {lastIndexed && (
-            <p className="text-sm text-muted-foreground mt-1">Last indexed: {lastIndexed}</p>
+    <div className="mx-auto max-w-4xl px-4 py-8">
+      <div className="mb-6">
+        <div className="flex items-baseline gap-3">
+          <h1 className="text-3xl font-bold tracking-tight">{profileName}</h1>
+          {profileDescription && (
+            <span className="text-muted-foreground">{profileDescription}</span>
           )}
         </div>
-
-        <form className="flex gap-2 mb-6" onSubmit={handleSearch}>
-          <Input
-            className="flex-1"
-            type="text"
-            placeholder="Search file contents..."
-            value={query}
-            onChange={(e) => setQuery(e.target.value)}
-          />
-          <Button type="submit" disabled={searching}>
-            Search
-          </Button>
-          {isSearchActive && (
-            <Button type="button" variant="outline" onClick={handleClearSearch}>
-              Clear
-            </Button>
-          )}
-        </form>
-
-        <div className="flex flex-wrap gap-4 mb-6 items-center">
-          <div className="flex items-center gap-2">
-            <label htmlFor="ext-preset" className="text-sm text-muted-foreground whitespace-nowrap">
-              Extensions:
-            </label>
-            <select
-              id="ext-preset"
-              className="h-9 rounded-md border border-input bg-background px-3 text-sm"
-              value={extPreset}
-              onChange={(e) => {
-                const preset = e.target.value;
-                setExtPreset(preset);
-                if (preset === "custom") {
-                  setExt("");
-                } else {
-                  setExt(EXT_PRESETS[preset] || "");
-                }
-              }}
-            >
-              <option value="">All types</option>
-              <option value="code">Code (rs,py,go,java,...)</option>
-              <option value="web">Web (html,css,js,ts,...)</option>
-              <option value="config">Config (json,yaml,toml,...)</option>
-              <option value="docs">Docs (md,txt,rst)</option>
-              <option value="data">Data (csv,json,xml,sql,...)</option>
-              <option value="shell">Shell (sh,bash,zsh,...)</option>
-              <option value="custom">Custom...</option>
-            </select>
-            {extPreset === "custom" && (
-              <Input
-                className="w-48"
-                type="text"
-                placeholder="e.g. rs,py,js"
-                value={ext}
-                onChange={(e) => setExt(e.target.value)}
-              />
-            )}
-          </div>
-          <fieldset className="flex items-center gap-2 border-none p-0 m-0">
-            <legend className="text-sm text-muted-foreground whitespace-nowrap float-left mr-2 p-0">
-              Search in:
-            </legend>
-            <div className="flex gap-1">
-              {(["both", "filename", "content"] as const).map((m) => (
-                <Button
-                  key={m}
-                  type="button"
-                  variant={mode === m ? "default" : "outline"}
-                  size="sm"
-                  onClick={() => setMode(m)}
-                >
-                  {m === "both" ? "All" : m === "filename" ? "Filename" : "Content"}
-                </Button>
-              ))}
-            </div>
-          </fieldset>
-        </div>
-
-        {isSearchActive ? (
-          <div className="space-y-3">
-            {searching && <p className="text-muted-foreground">Searching...</p>}
-
-            {searchError && (
-              <Alert variant="destructive" className="mb-4">
-                <AlertDescription>Error: {searchError}</AlertDescription>
-              </Alert>
-            )}
-
-            {!searching && !searchError && (
-              <>
-                <p className="text-sm text-muted-foreground">
-                  {totalCount !== null && totalPages > 1
-                    ? `Page ${page} of ${totalPages} (${totalCount} results)`
-                    : `${searchResults.length} result${searchResults.length !== 1 ? "s" : ""} found`}
-                </p>
-                {searchResults.map((result) => (
-                  <Card
-                    key={result.key}
-                    className={previewKey === result.key ? "ring-2 ring-primary" : ""}
-                  >
-                    <CardContent>
-                      <button
-                        type="button"
-                        className="text-primary font-semibold hover:underline block mb-1 bg-transparent border-none p-0 cursor-pointer text-left"
-                        onClick={() => openPreview(result.key)}
-                      >
-                        {result.key}
-                      </button>
-                      <p className="text-sm text-muted-foreground mb-2">
-                        {formatBytes(result.size)} &middot;{" "}
-                        {new Date(result.last_modified).toLocaleString()}
-                      </p>
-                      <div className="text-sm leading-relaxed font-mono">
-                        {result.snippet.map((segment) =>
-                          segment.highlighted ? (
-                            <mark
-                              key={`${segment.start}-${segment.end}-highlight`}
-                              className="bg-yellow-100 dark:bg-yellow-900/50 px-0.5 rounded-sm"
-                            >
-                              {segment.text}
-                            </mark>
-                          ) : (
-                            <span key={`${segment.start}-${segment.end}-text`}>{segment.text}</span>
-                          ),
-                        )}
-                      </div>
-                    </CardContent>
-                  </Card>
-                ))}
-                {totalPages > 1 && (
-                  <nav className="flex items-center justify-center gap-1 pt-4">
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      disabled={page <= 1}
-                      onClick={() => handlePageChange(1)}
-                    >
-                      First
-                    </Button>
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      disabled={page <= 1}
-                      onClick={() => handlePageChange(page - 1)}
-                    >
-                      Previous
-                    </Button>
-                    {getPageNumbers(page, totalPages).map((p, i) =>
-                      p === "ellipsis" ? (
-                        <span
-                          key={`ellipsis-${i === 1 ? "start" : "end"}`}
-                          className="px-1 text-sm text-muted-foreground"
-                        >
-                          ...
-                        </span>
-                      ) : (
-                        <Button
-                          key={p}
-                          variant={p === page ? "default" : "outline"}
-                          size="sm"
-                          onClick={() => handlePageChange(p)}
-                        >
-                          {p}
-                        </Button>
-                      ),
-                    )}
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      disabled={page >= totalPages}
-                      onClick={() => handlePageChange(page + 1)}
-                    >
-                      Next
-                    </Button>
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      disabled={page >= totalPages}
-                      onClick={() => handlePageChange(totalPages)}
-                    >
-                      Last
-                    </Button>
-                  </nav>
-                )}
-              </>
-            )}
-          </div>
-        ) : (
-          <>
-            <nav className="flex items-center gap-1 text-sm mb-4 flex-wrap">
-              <button
-                type="button"
-                className={`hover:underline ${prefix ? "text-primary" : "font-semibold text-foreground"}`}
-                onClick={() => prefix && navigate(`/p/${profileName}/browse/`)}
-                disabled={!prefix}
-              >
-                Root
-              </button>
-              {segments.map((seg, i) => {
-                const segPrefix = `${segments.slice(0, i + 1).join("/")}/`;
-                const isLast = i === segments.length - 1;
-                return (
-                  <span key={segPrefix} className="flex items-center gap-1">
-                    <span className="text-muted-foreground">/</span>
-                    <button
-                      type="button"
-                      className={`hover:underline ${isLast ? "font-semibold text-foreground" : "text-primary"}`}
-                      onClick={() =>
-                        !isLast && navigate(`/p/${profileName}/browse/${encodeS3Path(segPrefix)}`)
-                      }
-                      disabled={isLast}
-                    >
-                      {seg}
-                    </button>
-                  </span>
-                );
-              })}
-            </nav>
-
-            {browseLoading && <p className="text-muted-foreground">Loading...</p>}
-
-            {browseError && (
-              <Alert variant="destructive" className="mb-4">
-                <AlertDescription>Error: {browseError}</AlertDescription>
-              </Alert>
-            )}
-
-            {!browseLoading && !browseError && (
-              <>
-                {folders.length === 0 && files.length === 0 && (
-                  <p className="text-muted-foreground">This folder is empty.</p>
-                )}
-
-                {folders.length > 0 && (
-                  <div className="space-y-1 mb-4">
-                    {folders.map((folder) => (
-                      <button
-                        key={folder.key}
-                        type="button"
-                        className="w-full text-left px-3 py-2 rounded-md hover:bg-accent transition-colors flex items-center gap-2"
-                        onClick={() =>
-                          navigate(`/p/${profileName}/browse/${encodeS3Path(folder.key)}`)
-                        }
-                      >
-                        <span className="text-muted-foreground">&#128193;</span>
-                        <span className="font-medium">{folder.name}</span>
-                      </button>
-                    ))}
-                  </div>
-                )}
-
-                {files.length > 0 && (
-                  <div className="space-y-1">
-                    {files.map((file) => (
-                      <button
-                        key={file.key}
-                        type="button"
-                        className={`w-full text-left px-3 py-2 rounded-md hover:bg-accent transition-colors flex items-center gap-2 ${previewKey === file.key ? "bg-accent" : ""}`}
-                        onClick={() => openPreview(file.key)}
-                      >
-                        <span className="text-muted-foreground">&#128196;</span>
-                        <span className="flex-1 font-medium">{file.name}</span>
-                        <span className="text-sm text-muted-foreground">
-                          {formatBytes(file.size)}
-                        </span>
-                        <span className="text-sm text-muted-foreground">
-                          {file.last_modified ? new Date(file.last_modified).toLocaleString() : ""}
-                        </span>
-                      </button>
-                    ))}
-                  </div>
-                )}
-
-                {(browsePageIndex > 0 || isTruncated) && (
-                  <nav className="flex items-center justify-center gap-2 pt-4">
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      disabled={browsePageIndex === 0 || browseLoading}
-                      onClick={() =>
-                        fetchBrowsePage(
-                          pageTokens[browsePageIndex - 1] ?? null,
-                          browsePageIndex - 1,
-                        )
-                      }
-                    >
-                      Previous
-                    </Button>
-                    <span className="text-sm text-muted-foreground">
-                      Page {browsePageIndex + 1}
-                    </span>
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      disabled={!isTruncated || browseLoading}
-                      onClick={() =>
-                        fetchBrowsePage(
-                          pageTokens[browsePageIndex + 1] ?? null,
-                          browsePageIndex + 1,
-                        )
-                      }
-                    >
-                      Next
-                    </Button>
-                  </nav>
-                )}
-              </>
-            )}
-          </>
+        {lastIndexed && (
+          <p className="text-sm text-muted-foreground mt-1">Last indexed: {lastIndexed}</p>
         )}
       </div>
 
-      {previewUrl && (
-        <div className="flex-1 flex flex-col min-w-0">
-          <div className="flex items-center justify-between border-b border-border px-4 py-2 shrink-0 gap-2">
-            <Button variant="ghost" size="sm" className="lg:hidden" onClick={closePreview}>
-              <ArrowLeft className="h-4 w-4 mr-1" />
-              Back
-            </Button>
-            <span className="text-sm font-medium truncate flex-1">{previewFileName}</span>
-            <div className="flex items-center gap-1">
-              <a
-                href={previewUrl}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="inline-flex items-center justify-center rounded-md text-sm font-medium h-8 w-8 hover:bg-accent transition-colors"
-                title="Open in new tab"
-              >
-                <ExternalLink className="h-4 w-4" />
-              </a>
-              <button
+      <form className="flex gap-2 mb-6" onSubmit={handleSearch}>
+        <Input
+          className="flex-1"
+          type="text"
+          placeholder="Search file contents..."
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+        />
+        <Button type="submit" disabled={searching}>
+          Search
+        </Button>
+        {isSearchActive && (
+          <Button type="button" variant="outline" onClick={handleClearSearch}>
+            Clear
+          </Button>
+        )}
+      </form>
+
+      <div className="flex flex-wrap gap-4 mb-6 items-center">
+        <div className="flex items-center gap-2">
+          <label htmlFor="ext-preset" className="text-sm text-muted-foreground whitespace-nowrap">
+            Extensions:
+          </label>
+          <select
+            id="ext-preset"
+            className="h-9 rounded-md border border-input bg-background px-3 text-sm"
+            value={extPreset}
+            onChange={(e) => {
+              const preset = e.target.value;
+              setExtPreset(preset);
+              if (preset === "custom") {
+                setExt("");
+              } else {
+                setExt(EXT_PRESETS[preset] || "");
+              }
+            }}
+          >
+            <option value="">All types</option>
+            <option value="code">Code (rs,py,go,java,...)</option>
+            <option value="web">Web (html,css,js,ts,...)</option>
+            <option value="config">Config (json,yaml,toml,...)</option>
+            <option value="docs">Docs (md,txt,rst)</option>
+            <option value="data">Data (csv,json,xml,sql,...)</option>
+            <option value="shell">Shell (sh,bash,zsh,...)</option>
+            <option value="custom">Custom...</option>
+          </select>
+          {extPreset === "custom" && (
+            <Input
+              className="w-48"
+              type="text"
+              placeholder="e.g. rs,py,js"
+              value={ext}
+              onChange={(e) => setExt(e.target.value)}
+            />
+          )}
+        </div>
+        <fieldset className="flex items-center gap-2 border-none p-0 m-0">
+          <legend className="text-sm text-muted-foreground whitespace-nowrap float-left mr-2 p-0">
+            Search in:
+          </legend>
+          <div className="flex gap-1">
+            {(["both", "filename", "content"] as const).map((m) => (
+              <Button
+                key={m}
                 type="button"
-                className="hidden lg:inline-flex items-center justify-center rounded-md text-sm font-medium h-8 w-8 hover:bg-accent transition-colors"
-                onClick={closePreview}
-                title="Close preview"
+                variant={mode === m ? "default" : "outline"}
+                size="sm"
+                onClick={() => setMode(m)}
               >
-                <X className="h-4 w-4" />
-              </button>
-            </div>
+                {m === "both" ? "All" : m === "filename" ? "Filename" : "Content"}
+              </Button>
+            ))}
           </div>
-          <iframe
-            className="flex-1 w-full border-0"
-            src={previewUrl}
-            sandbox="allow-same-origin"
-            title={`Preview: ${previewFileName}`}
-          />
+        </fieldset>
+      </div>
+
+      {isSearchActive ? (
+        <div className="space-y-3">
+          {searching && <p className="text-muted-foreground">Searching...</p>}
+
+          {searchError && (
+            <Alert variant="destructive" className="mb-4">
+              <AlertDescription>Error: {searchError}</AlertDescription>
+            </Alert>
+          )}
+
+          {!searching && !searchError && (
+            <>
+              <p className="text-sm text-muted-foreground">
+                {totalCount !== null && totalPages > 1
+                  ? `Page ${page} of ${totalPages} (${totalCount} results)`
+                  : `${searchResults.length} result${searchResults.length !== 1 ? "s" : ""} found`}
+              </p>
+              {searchResults.map((result) => (
+                <Card
+                  key={result.key}
+                  className={previewKey === result.key ? "ring-2 ring-primary" : ""}
+                >
+                  <CardContent>
+                    <button
+                      type="button"
+                      className="text-primary font-semibold hover:underline block mb-1 bg-transparent border-none p-0 cursor-pointer text-left"
+                      onClick={() => openPreview(result.key)}
+                    >
+                      {result.key}
+                    </button>
+                    <p className="text-sm text-muted-foreground mb-2">
+                      {formatBytes(result.size)} &middot;{" "}
+                      {new Date(result.last_modified).toLocaleString()}
+                    </p>
+                    <div className="text-sm leading-relaxed font-mono">
+                      {result.snippet.map((segment) =>
+                        segment.highlighted ? (
+                          <mark
+                            key={`${segment.start}-${segment.end}-highlight`}
+                            className="bg-yellow-100 dark:bg-yellow-900/50 px-0.5 rounded-sm"
+                          >
+                            {segment.text}
+                          </mark>
+                        ) : (
+                          <span key={`${segment.start}-${segment.end}-text`}>{segment.text}</span>
+                        ),
+                      )}
+                    </div>
+                  </CardContent>
+                </Card>
+              ))}
+              {totalPages > 1 && (
+                <nav className="flex items-center justify-center gap-1 pt-4">
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    disabled={page <= 1}
+                    onClick={() => handlePageChange(1)}
+                  >
+                    First
+                  </Button>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    disabled={page <= 1}
+                    onClick={() => handlePageChange(page - 1)}
+                  >
+                    Previous
+                  </Button>
+                  {getPageNumbers(page, totalPages).map((p, i) =>
+                    p === "ellipsis" ? (
+                      <span
+                        key={`ellipsis-${i === 1 ? "start" : "end"}`}
+                        className="px-1 text-sm text-muted-foreground"
+                      >
+                        ...
+                      </span>
+                    ) : (
+                      <Button
+                        key={p}
+                        variant={p === page ? "default" : "outline"}
+                        size="sm"
+                        onClick={() => handlePageChange(p)}
+                      >
+                        {p}
+                      </Button>
+                    ),
+                  )}
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    disabled={page >= totalPages}
+                    onClick={() => handlePageChange(page + 1)}
+                  >
+                    Next
+                  </Button>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    disabled={page >= totalPages}
+                    onClick={() => handlePageChange(totalPages)}
+                  >
+                    Last
+                  </Button>
+                </nav>
+              )}
+            </>
+          )}
+        </div>
+      ) : (
+        <>
+          <nav className="flex items-center gap-1 text-sm mb-4 flex-wrap">
+            <button
+              type="button"
+              className={`hover:underline ${prefix ? "text-primary" : "font-semibold text-foreground"}`}
+              onClick={() => prefix && navigate(`/p/${profileName}/browse/`)}
+              disabled={!prefix}
+            >
+              Root
+            </button>
+            {segments.map((seg, i) => {
+              const segPrefix = `${segments.slice(0, i + 1).join("/")}/`;
+              const isLast = i === segments.length - 1;
+              return (
+                <span key={segPrefix} className="flex items-center gap-1">
+                  <span className="text-muted-foreground">/</span>
+                  <button
+                    type="button"
+                    className={`hover:underline ${isLast ? "font-semibold text-foreground" : "text-primary"}`}
+                    onClick={() =>
+                      !isLast && navigate(`/p/${profileName}/browse/${encodeS3Path(segPrefix)}`)
+                    }
+                    disabled={isLast}
+                  >
+                    {seg}
+                  </button>
+                </span>
+              );
+            })}
+          </nav>
+
+          {browseLoading && <p className="text-muted-foreground">Loading...</p>}
+
+          {browseError && (
+            <Alert variant="destructive" className="mb-4">
+              <AlertDescription>Error: {browseError}</AlertDescription>
+            </Alert>
+          )}
+
+          {!browseLoading && !browseError && (
+            <>
+              {folders.length === 0 && files.length === 0 && (
+                <p className="text-muted-foreground">This folder is empty.</p>
+              )}
+
+              {folders.length > 0 && (
+                <div className="space-y-1 mb-4">
+                  {folders.map((folder) => (
+                    <button
+                      key={folder.key}
+                      type="button"
+                      className="w-full text-left px-3 py-2 rounded-md hover:bg-accent transition-colors flex items-center gap-2"
+                      onClick={() =>
+                        navigate(`/p/${profileName}/browse/${encodeS3Path(folder.key)}`)
+                      }
+                    >
+                      <span className="text-muted-foreground">&#128193;</span>
+                      <span className="font-medium">{folder.name}</span>
+                    </button>
+                  ))}
+                </div>
+              )}
+
+              {files.length > 0 && (
+                <div className="space-y-1">
+                  {files.map((file) => (
+                    <button
+                      key={file.key}
+                      type="button"
+                      className={`w-full text-left px-3 py-2 rounded-md hover:bg-accent transition-colors flex items-center gap-2 ${previewKey === file.key ? "bg-accent" : ""}`}
+                      onClick={() => openPreview(file.key)}
+                    >
+                      <span className="text-muted-foreground">&#128196;</span>
+                      <span className="flex-1 font-medium">{file.name}</span>
+                      <span className="text-sm text-muted-foreground">
+                        {formatBytes(file.size)}
+                      </span>
+                      <span className="text-sm text-muted-foreground">
+                        {file.last_modified ? new Date(file.last_modified).toLocaleString() : ""}
+                      </span>
+                    </button>
+                  ))}
+                </div>
+              )}
+
+              {(browsePageIndex > 0 || isTruncated) && (
+                <nav className="flex items-center justify-center gap-2 pt-4">
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    disabled={browsePageIndex === 0 || browseLoading}
+                    onClick={() =>
+                      fetchBrowsePage(pageTokens[browsePageIndex - 1] ?? null, browsePageIndex - 1)
+                    }
+                  >
+                    Previous
+                  </Button>
+                  <span className="text-sm text-muted-foreground">Page {browsePageIndex + 1}</span>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    disabled={!isTruncated || browseLoading}
+                    onClick={() =>
+                      fetchBrowsePage(pageTokens[browsePageIndex + 1] ?? null, browsePageIndex + 1)
+                    }
+                  >
+                    Next
+                  </Button>
+                </nav>
+              )}
+            </>
+          )}
+        </>
+      )}
+
+      {previewUrl && (
+        <div
+          role="dialog"
+          className="fixed inset-0 z-50 flex flex-col bg-background/80 backdrop-blur-sm"
+          onClick={(e) => {
+            if (e.target === e.currentTarget) closePreview();
+          }}
+          onKeyDown={(e) => {
+            if (e.key === "Escape") closePreview();
+          }}
+        >
+          <div className="flex flex-col mx-auto w-full max-w-5xl h-[90vh] mt-[5vh] rounded-lg border border-border bg-background shadow-lg overflow-hidden">
+            <div className="flex items-center justify-between border-b border-border px-4 py-2 shrink-0 gap-2">
+              <span className="text-sm font-medium truncate flex-1">{previewFileName}</span>
+              <div className="flex items-center gap-1">
+                <button
+                  type="button"
+                  className="inline-flex items-center justify-center rounded-md text-sm font-medium h-8 w-8 hover:bg-accent transition-colors"
+                  onClick={() => {
+                    const fullUrl = `${window.location.origin}${previewUrl}&download=true`;
+                    navigator.clipboard.writeText(fullUrl);
+                  }}
+                  title="Copy URL"
+                >
+                  <ClipboardCopy className="h-4 w-4" />
+                </button>
+                <a
+                  href={`${previewUrl}&download=true`}
+                  className="inline-flex items-center justify-center rounded-md text-sm font-medium h-8 w-8 hover:bg-accent transition-colors"
+                  title="Download"
+                >
+                  <Download className="h-4 w-4" />
+                </a>
+                <button
+                  type="button"
+                  className="inline-flex items-center justify-center rounded-md text-sm font-medium h-8 w-8 hover:bg-accent transition-colors"
+                  onClick={closePreview}
+                  title="Close"
+                >
+                  <X className="h-4 w-4" />
+                </button>
+              </div>
+            </div>
+            <iframe
+              className="flex-1 w-full border-0"
+              src={previewUrl}
+              sandbox="allow-same-origin"
+              referrerPolicy="no-referrer"
+              title={`Preview: ${previewFileName}`}
+            />
+          </div>
         </div>
       )}
     </div>
