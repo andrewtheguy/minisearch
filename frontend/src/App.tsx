@@ -352,7 +352,7 @@ function BrowseView({ profileName, prefix }: { profileName: string; prefix: stri
   const isSearchActive = searchResults !== null;
 
   return (
-    <div className="mx-auto max-w-4xl px-4 py-8">
+    <div className="px-8 py-8">
       <div className="mb-6">
         <div className="flex items-baseline gap-3">
           <h1 className="text-3xl font-bold tracking-tight">{profileName}</h1>
@@ -669,7 +669,7 @@ function BrowseView({ profileName, prefix }: { profileName: string; prefix: stri
       {previewUrl && (
         <div
           role="dialog"
-          className="fixed inset-0 z-50 flex flex-col bg-background/80 backdrop-blur-sm"
+          className="fixed inset-0 z-50 flex flex-col px-8 bg-background/80 backdrop-blur-sm"
           onClick={(e) => {
             if (e.target === e.currentTarget) closePreview();
           }}
@@ -677,7 +677,7 @@ function BrowseView({ profileName, prefix }: { profileName: string; prefix: stri
             if (e.key === "Escape") closePreview();
           }}
         >
-          <div className="flex flex-col mx-auto w-full max-w-5xl h-[90vh] mt-[5vh] rounded-lg border border-border bg-background shadow-lg overflow-hidden">
+          <div className="flex flex-col w-full h-[90vh] mt-[5vh] mx-auto rounded-lg border border-border bg-background shadow-lg overflow-hidden">
             <div className="flex items-center justify-between border-b border-border px-4 py-2 shrink-0 gap-2">
               <span className="text-sm font-medium truncate flex-1">{previewFileName}</span>
               <div className="flex items-center gap-1">
