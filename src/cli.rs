@@ -63,6 +63,14 @@ pub enum BindTarget {
     Explicit(String, u16),
 }
 
+fn parse_port(s: &str) -> Result<u16, String> {
+    let port: u16 = s.parse().map_err(|_| format!("invalid port: '{s}'"))?;
+    if port == 0 {
+        return Err(format!("invalid port: '{s}'"));
+    }
+    Ok(port)
+}
+
 fn parse_bind(s: &str) -> Result<BindTarget, String> {
     let s = s.trim();
     if s.is_empty() {
@@ -76,10 +84,7 @@ fn parse_bind(s: &str) -> Result<BindTarget, String> {
         if rest.is_empty() {
             (host.to_string(), DEFAULT_PORT)
         } else if let Some(port_str) = rest.strip_prefix(':') {
-            let port = port_str
-                .parse::<u16>()
-                .map_err(|_| format!("invalid port: '{port_str}' (must be a number 1-65535)"))?;
-            (host.to_string(), port)
+            (host.to_string(), parse_port(port_str)?)
         } else {
             return Err(format!("unexpected characters after ']': '{rest}' (expected ':PORT' or nothing)"));
         }
@@ -89,18 +94,11 @@ fn parse_bind(s: &str) -> Result<BindTarget, String> {
         if port_str.is_empty() {
             (host.to_string(), DEFAULT_PORT)
         } else {
-            let port = port_str
-                .parse::<u16>()
-                .map_err(|_| format!("invalid port: '{port_str}' (must be a number 1-65535)"))?;
-            (host.to_string(), port)
+            (host.to_string(), parse_port(port_str)?)
         }
     } else {
         (s.to_string(), DEFAULT_PORT)
     };
-
-    if port == 0 {
-        return Err("port must be between 1 and 65535".into());
-    }
 
     if host.is_empty() {
         Ok(BindTarget::AllInterfaces(port))

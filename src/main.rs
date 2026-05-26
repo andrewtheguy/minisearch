@@ -140,12 +140,12 @@ async fn main() -> anyhow::Result<()> {
                     info!("listening on http://localhost:{port}");
 
                     let app_clone = app.clone();
-                    tokio::spawn(async move {
-                        if let Err(e) = axum::serve(listener_v6, app_clone).await {
-                            error!("IPv6 listener error: {e}");
-                        }
-                    });
-                    axum::serve(listener_v4, app).await.context("server error")?;
+                    let v6 = axum::serve(listener_v6, app_clone);
+                    let v4 = axum::serve(listener_v4, app);
+                    tokio::select! {
+                        res = v4 => res.context("IPv4 listener error")?,
+                        res = v6 => res.context("IPv6 listener error")?,
+                    }
                 }
                 cli::BindTarget::AllInterfaces(port) => {
                     let addr = format!("[::]:{port}");
