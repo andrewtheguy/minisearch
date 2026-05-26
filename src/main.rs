@@ -42,9 +42,45 @@ async fn main() -> anyhow::Result<()> {
                 }
             }
         }
-        Commands::Profiles => {
-            for profile in &config.profiles {
-                println!("{}\t{}", profile.name, profile.description);
+        Commands::Status { profile: filter } => {
+            let profiles: Vec<_> = if let Some(name) = &filter {
+                config.profiles.iter()
+                    .filter(|p| p.name == *name)
+                    .collect()
+            } else {
+                config.profiles.iter().collect()
+            };
+            if profiles.is_empty() {
+                if let Some(name) = &filter {
+                    anyhow::bail!("profile not found: {name}");
+                }
+                anyhow::bail!("no profiles configured");
+            }
+            for profile in profiles {
+                let work_dir = config.profile_work_dir(&profile.name);
+                let index_path = work_dir.join(config::INDEX_DIR);
+                let index_exists = index_path.exists();
+                let state_path = work_dir.join("state.json");
+                let last_indexed = match std::fs::read_to_string(&state_path) {
+                    Ok(s) => match serde_json::from_str::<serde_json::Value>(&s) {
+                        Ok(v) => match v["last_indexed"].as_str() {
+                            Some(ts) => Ok(ts.to_string()),
+                            None => Err("state.json missing 'last_indexed' field".to_string()),
+                        },
+                        Err(e) => Err(format!("state.json parse error: {e}")),
+                    },
+                    Err(e) if e.kind() == std::io::ErrorKind::NotFound => Err("not indexed yet".to_string()),
+                    Err(e) => Err(format!("failed to read state.json: {e}")),
+                };
+
+                println!("{}", profile.name);
+                println!("  description:  {}", profile.description);
+                println!("  index:        {}", if index_exists { "exists" } else { "not found" });
+                match &last_indexed {
+                    Ok(ts) => println!("  last indexed: {ts}"),
+                    Err(msg) => println!("  last indexed: {msg}"),
+                }
+                println!();
             }
         }
         Commands::Serve { profile: profile_name } => {

@@ -42,8 +42,12 @@ pub enum Commands {
         #[arg(long, value_parser = parse_duration)]
         every: Option<Duration>,
     },
-    /// List configured profiles
-    Profiles,
+    /// Show profile status (index state, last indexed time)
+    Status {
+        /// Profile name (shows all profiles if omitted)
+        #[arg(short, long)]
+        profile: Option<String>,
+    },
 }
 
 fn parse_duration(s: &str) -> Result<Duration, String> {

@@ -35,7 +35,7 @@ The binary has three subcommands:
 
 - **`index`** — Scans an S3 bucket, downloads text files, and builds/updates the Tantivy index on disk. Requires a `--profile` flag to specify which profile to index.
 - **`serve`** — Starts the Axum web server on port 52378 for a single profile. Requires `--profile` flag. Validates S3 connectivity and search index on startup.
-- **`profiles`** — Lists configured profiles.
+- **`status`** — Shows profile status: name, description, whether the index exists, and last indexed time. Accepts optional `--profile` to filter to a single profile.
 
 Configuration is loaded from a TOML file (`-c`/`--config` flag or `MINISEARCH_CONFIG` env var).
 

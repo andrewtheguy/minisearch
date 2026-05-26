@@ -73,8 +73,8 @@ Profile names must be unique and contain only lowercase letters, digits, hyphens
 The binary has three subcommands:
 
 ```bash
-# List configured profiles
-minisearch profiles
+# Show profile status (index state, last indexed time)
+minisearch status
 
 # Build the search index for a profile
 minisearch index --profile my-bucket
