@@ -6,6 +6,7 @@ use anyhow::Context;
 use axum::body::Body;
 use axum::extract::{Path, Query, State};
 use axum::http::header;
+use axum::response::IntoResponse;
 use axum::Json;
 use hmac::{Hmac, Mac};
 use serde::{Deserialize, Serialize};
@@ -474,7 +475,7 @@ pub async fn presign(
     State(state): State<AppState>,
     Path(profile_name): Path<String>,
     Query(params): Query<PresignParams>,
-) -> Result<axum::response::Redirect, AppError> {
+) -> Result<axum::response::Response, AppError> {
     let profile = get_profile(&state, &profile_name)?;
 
     let key = params
@@ -484,12 +485,20 @@ pub async fn presign(
 
     let download = params.download;
 
-    if let Some(url) = profile.state.backend.presign_url(&key, download).await.context("presign failed")? {
-        return Ok(axum::response::Redirect::temporary(&url));
-    }
+    // S3 backends generate native presigned URLs; WebDAV falls back to HMAC-signed fetch URLs
+    let url = if let Some(url) = profile.state.backend.presign_url(&key, download).await.context("presign failed")? {
+        url
+    } else {
+        generate_signed_url(&profile_name, &key, &state.signing_secret, download)
+    };
 
-    let url = generate_signed_url(&profile_name, &key, &state.signing_secret, download);
-    Ok(axum::response::Redirect::temporary(&url))
+    // Downloads redirect so the browser handles the navigation directly;
+    // previews return JSON so the frontend can set the iframe src without a redirect in the sandbox
+    if download {
+        Ok(axum::response::Redirect::temporary(&url).into_response())
+    } else {
+        Ok(axum::response::Json(serde_json::json!({ "url": url })).into_response())
+    }
 }
 
 #[derive(Deserialize)]
@@ -546,19 +555,19 @@ async fn proxy_webdav_file(backend: &Backend, key: &str, download: bool) -> Resu
         .await
         .context("failed to fetch file from backend")?;
 
-    let content_type = resp
-        .headers()
-        .get("content-type")
-        .and_then(|v| v.to_str().ok())
-        .map(|s| s.to_string())
-        .unwrap_or_else(|| {
-            let mime = new_mime_guess::from_path(key).first_or_octet_stream();
-            if mime.type_() == "text" {
-                format!("{mime}; charset=utf-8")
-            } else {
-                mime.to_string()
-            }
-        });
+    // Prefer extension-based guess over WebDAV's content-type, which is often application/octet-stream
+    let mime = new_mime_guess::from_path(key).first_or_octet_stream();
+    let content_type = if mime.essence_str() == "application/octet-stream" {
+        resp.headers()
+            .get("content-type")
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or("application/octet-stream")
+            .to_string()
+    } else if mime.type_() == "text" {
+        format!("{mime}; charset=utf-8")
+    } else {
+        mime.to_string()
+    };
 
     let body = Body::from_stream(resp.bytes_stream());
 

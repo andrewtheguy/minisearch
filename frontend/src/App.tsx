@@ -148,20 +148,25 @@ function BrowseView({ profileName, prefix }: { profileName: string; prefix: stri
   const searchControllerRef = useRef<AbortController | null>(null);
 
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
+  const [presignUrl, setPresignUrl] = useState<string | null>(null);
   const [previewFileName, setPreviewFileName] = useState<string | null>(null);
   const [previewKey, setPreviewKey] = useState<string | null>(null);
   const [copyStatus, setCopyStatus] = useState<"idle" | "copied" | "failed">("idle");
 
-  function openPreview(key: string) {
-    const url = `/api/p/${profileName}/presign?key=${encodeURIComponent(key)}`;
-    setPreviewUrl(url);
+  async function openPreview(key: string) {
+    const base = `/api/p/${profileName}/presign?key=${encodeURIComponent(key)}`;
+    setPresignUrl(base);
     setPreviewFileName(key.split("/").pop() || key);
     setPreviewKey(key);
     setCopyStatus("idle");
+    const resp = await fetch(base);
+    const { url } = await resp.json();
+    setPreviewUrl(url);
   }
 
   const closePreview = useCallback(() => {
     setPreviewUrl(null);
+    setPresignUrl(null);
     setPreviewFileName(null);
     setPreviewKey(null);
   }, []);
@@ -681,7 +686,7 @@ function BrowseView({ profileName, prefix }: { profileName: string; prefix: stri
         </>
       )}
 
-      {previewUrl && (
+      {presignUrl && (
         <div
           role="dialog"
           className="fixed inset-0 z-50 flex flex-col px-8 bg-background/80 backdrop-blur-sm"
@@ -698,7 +703,7 @@ function BrowseView({ profileName, prefix }: { profileName: string; prefix: stri
                   type="button"
                   className="inline-flex items-center justify-center rounded-md text-sm font-medium h-8 w-8 hover:bg-accent transition-colors"
                   onClick={() => {
-                    const fullUrl = `${window.location.origin}${previewUrl}&download=true`;
+                    const fullUrl = `${window.location.origin}${presignUrl}&download=true`;
                     navigator.clipboard.writeText(fullUrl).then(
                       () => {
                         setCopyStatus("copied");
@@ -725,7 +730,7 @@ function BrowseView({ profileName, prefix }: { profileName: string; prefix: stri
                   )}
                 </button>
                 <a
-                  href={`${previewUrl}&download=true`}
+                  href={`${presignUrl}&download=true`}
                   className="inline-flex items-center justify-center rounded-md text-sm font-medium h-8 w-8 hover:bg-accent transition-colors"
                   title="Download"
                 >
@@ -741,13 +746,19 @@ function BrowseView({ profileName, prefix }: { profileName: string; prefix: stri
                 </button>
               </div>
             </div>
-            <iframe
-              className="flex-1 w-full border-0"
-              src={previewUrl}
-              sandbox="allow-same-origin"
-              referrerPolicy="no-referrer"
-              title={`Preview: ${previewFileName}`}
-            />
+            {previewUrl ? (
+              <iframe
+                className="flex-1 w-full border-0"
+                src={previewUrl}
+                sandbox="allow-same-origin"
+                referrerPolicy="no-referrer"
+                title={`Preview: ${previewFileName}`}
+              />
+            ) : (
+              <div className="flex-1 flex items-center justify-center text-muted-foreground">
+                Loading…
+              </div>
+            )}
           </div>
         </div>
       )}
