@@ -60,7 +60,7 @@ async fn main() -> anyhow::Result<()> {
                 let work_dir = config.profile_work_dir(&profile.name);
                 let index_path = work_dir.join(config::INDEX_DIR);
                 let index_exists = index_path.exists();
-                let last_indexed = state::read_last_indexed(&work_dir);
+                let last_indexed = state::read_last_indexed(&work_dir).await;
 
                 println!("profile:      {}", profile.name);
                 println!("description:  {}", profile.description);

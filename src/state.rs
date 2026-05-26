@@ -10,9 +10,9 @@ pub struct IndexState {
     pub last_indexed: String,
 }
 
-pub fn read_last_indexed(work_dir: &Path) -> String {
+pub async fn read_last_indexed(work_dir: &Path) -> String {
     let state_path = work_dir.join("state.json");
-    match std::fs::read_to_string(&state_path) {
+    match tokio::fs::read_to_string(&state_path).await {
         Ok(s) => match serde_json::from_str::<IndexState>(&s) {
             Ok(state) => state.last_indexed,
             Err(e) => format!("state.json parse error: {e}"),

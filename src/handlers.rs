@@ -92,7 +92,7 @@ pub async fn profile_info(
 ) -> Result<Json<ProfileInfoResponse>, AppError> {
     let profile = get_profile(&state, &profile_name)?;
 
-    let last_indexed = crate::state::read_last_indexed(&profile.state.work_dir);
+    let last_indexed = crate::state::read_last_indexed(&profile.state.work_dir).await;
 
     Ok(Json(ProfileInfoResponse {
         name: profile.name.clone(),

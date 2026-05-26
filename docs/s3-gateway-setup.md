@@ -84,7 +84,7 @@ Open http://localhost:52378 to search your files.
 
 The gateway can be read-only to S3 clients, but read-only mode only rejects S3 write APIs. It does not stop other local processes from changing files under the served directory, and it does not make local-file reads snapshot-isolated.
 
-Behavior checked on 2026-05-26 against VersityGW v1.4.1 and rclone v1.74.2:
+Behavior checked against VersityGW v1.4.1 and rclone v1.74.2:
 
 - **VersityGW POSIX backend v1.4.1**: `ListObjectsV2` walks the local directory tree, `HeadObject` stats the local path, and `GetObject` stats and opens the local file before streaming it. It does not appear to lock files or retry when the file changes while it is being read. A file that is truncated, overwritten, or appended by another local process during indexing or download can therefore produce a partial, mixed, or failed read depending on filesystem behavior.
 - **rclone serve s3 v1.74.2**: The S3 server reads through rclone's VFS layer. `--read-only` prevents S3 clients from writing, but listings and object metadata can still be affected by the VFS directory cache, and direct local changes may not appear until the cache expires, is refreshed, or is invalidated. rclone's local backend has a `--local-no-check-updated` option for best-effort transfers of files that change during a read, especially append-only files, but that is not a general snapshot guarantee for arbitrary in-place modifications.
