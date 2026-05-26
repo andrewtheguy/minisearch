@@ -36,7 +36,9 @@ With the POSIX backend, the S3 bucket name corresponds to a subdirectory under t
 
 ### Option B: rclone
 
-Serve a local directory as a read-only S3 endpoint with [rclone serve s3](https://rclone.org/commands/rclone_serve_s3/):
+rclone can serve any configured rclone remote as a read-only S3 endpoint with [rclone serve s3](https://rclone.org/commands/rclone_serve_s3/).
+
+For a local directory:
 
 ```bash
 rclone serve s3 \
@@ -46,11 +48,24 @@ rclone serve s3 \
   /path/to/your/files
 ```
 
+For cloud-drive remotes that do not normally expose an S3 API, use the remote name instead:
+
+```bash
+rclone serve s3 --addr :7070 --auth-key myaccesskey,mysecretkey --read-only dropbox:
+rclone serve s3 --addr :7070 --auth-key myaccesskey,mysecretkey --read-only onedrive:
+rclone serve s3 --addr :7070 --auth-key myaccesskey,mysecretkey --read-only drive:
+rclone serve s3 --addr :7070 --auth-key myaccesskey,mysecretkey --read-only box:
+rclone serve s3 --addr :7070 --auth-key myaccesskey,mysecretkey --read-only pcloud:
+rclone serve s3 --addr :7070 --auth-key myaccesskey,mysecretkey --read-only mega:
+```
+
 - `--read-only` — only allows read operations; all write requests are rejected.
 - `--auth-key` — comma-separated `access_key_id,secret_access_key` pair; use the same values in the MiniSearch config.
 - `--addr` — address and port to listen on (default `127.0.0.1:8080`).
 
-Like VersityGW, rclone treats subdirectories under the root as buckets and ignores files in the root. If you serve `/data` and your files are in `/data/documents`, the bucket name is `documents`.
+Like VersityGW, rclone treats subdirectories under the served root as buckets and ignores files in the root. If you serve `/data` and your files are in `/data/documents`, the bucket name is `documents`. For cloud-drive remotes, create a top-level folder such as `documents` and use that folder name as the MiniSearch bucket.
+
+If the source already has an S3-compatible endpoint, prefer configuring MiniSearch directly against that endpoint. rclone is most useful here as a bridge for providers such as Dropbox, OneDrive, Google Drive, Box, pCloud, and Mega.
 
 ## 2. Configure MiniSearch
 
@@ -59,7 +74,7 @@ Create a `config.toml`:
 ```toml
 [[profiles]]
 name = "documents"
-description = "Local documents via S3 gateway"
+description = "Documents via S3 gateway"
 aws_access_key_id = "myaccesskey"
 aws_secret_access_key = "mysecretkey"
 aws_region = "us-east-1"
@@ -84,14 +99,16 @@ Open http://localhost:52378 to search your files.
 
 ## Live file consistency caveat
 
-The gateway can be read-only to S3 clients, but read-only mode only rejects S3 write APIs. It does not stop other local processes from changing files under the served directory, and it does not make local-file reads snapshot-isolated.
+The gateway can be read-only to S3 clients, but read-only mode only rejects S3 write APIs. It does not make the underlying source immutable or snapshot-isolated. The exact risk depends on the backend behind the gateway.
 
 Behavior checked against full source checkouts of VersityGW v1.4.1 and rclone v1.74.2:
 
 - **VersityGW POSIX backend v1.4.1**: `ListObjectsV2` walks the local directory tree via `os.DirFS` + `backend.Walk`. `HeadObject` stats the local path (`os.Stat`). `GetObject` stats the path, opens the file (`os.Open`), then stats the open file descriptor to read size and modtime before streaming the body. None of these operations lock the file or retry when it changes mid-read. A file that is truncated, overwritten, or appended by another local process during indexing or download can therefore produce a partial, mixed, or failed read depending on filesystem behavior.
-- **rclone serve s3 v1.74.2**: The S3 server is a gofakes3 front end over rclone's VFS. `ListBucket` traverses VFS directories (`VFS.Stat` + `Dir.ReadDirAll`). `HeadObject` stats the bucket and object through VFS. `GetObject` stats the bucket and object, records the VFS node size and metadata, opens the VFS file read-only (`file.Open(os.O_RDONLY)`), then streams that handle. `--read-only` is the VFS `read_only` option; it prevents writes, removals, and modtime changes through S3 requests, but it does not isolate reads from direct local filesystem changes. Listings and object metadata are subject to the VFS directory cache (`--dir-cache-time`, default 5 minutes), so direct local changes may not appear until the cache expires or is refreshed. Because response metadata is captured before streaming while the body is a live read handle, an actively changed file can return stale metadata with live bytes or fail with a read/checksum error. The local backend's `--local-no-check-updated` option freezes recorded size/modtime metadata and caps unranged local opens at that recorded size, which is useful for append-only files, but it is not a snapshot guarantee for arbitrary in-place modifications.
+- **rclone serve s3 v1.74.2**: The S3 server is a gofakes3 front end over rclone's VFS. `ListBucket` traverses VFS directories (`VFS.Stat` + `Dir.ReadDirAll`). `HeadObject` stats the bucket and object through VFS. `GetObject` stats the bucket and object, records the VFS node size and metadata, opens the VFS file read-only (`file.Open(os.O_RDONLY)`), then streams that handle. `--read-only` is the VFS `read_only` option; it prevents writes, removals, and modtime changes through S3 requests. Listings and object metadata are subject to the VFS directory cache (`--dir-cache-time`, default 5 minutes), so source changes may not appear until the cache expires or is refreshed.
+  - With filesystem-like rclone backends (`local`, `sftp`, `ftp`, `smb`, and WebDAV servers that expose a live mutable file tree), the VFS handle ultimately reads from a mutable file source. This has the same general risk as the VersityGW POSIX case: an actively truncated, overwritten, or appended file can produce stale metadata with live bytes, a partial read, or a read/checksum error. The local backend's `--local-no-check-updated` option freezes recorded size/modtime metadata and caps unranged local opens at that recorded size, which is useful for append-only files, but it is not a snapshot guarantee for arbitrary in-place modifications.
+  - With cloud-drive rclone backends (`dropbox`, `onedrive`, `drive`, `box`, `pcloud`, `mega`), reads usually target a provider-side file object rather than an open local file descriptor. In rclone v1.74.2, Dropbox downloads by file ID, OneDrive downloads an item ID through Microsoft Graph `/content`, Google Drive downloads by file ID/download URL or export endpoint, Box downloads `/files/{id}/content`, pCloud fetches a download link for a file ID, and Mega opens a download for a Mega node. These backends are better candidates when you want an S3 facade without worrying about half-read local file writes. They still do not provide a MiniSearch-wide snapshot: listings can be stale because of the VFS cache, a file replaced between list/head/get may resolve to the old or new provider-side object depending on backend behavior, and provider-specific exports such as Google Docs are not equivalent to immutable binary objects.
 
-MiniSearch itself is read-only against S3. Search results reflect the last completed index, while browse listings and presigned downloads read from the gateway at request time. If files can change while MiniSearch is indexing or while users are downloading them, prefer one of these patterns:
+MiniSearch itself is read-only against S3. Search results reflect the last completed index, while browse listings and presigned downloads read from the gateway at request time. If a filesystem-like source can change while MiniSearch is indexing or while users are downloading files, prefer one of these patterns:
 
 - Write files to a temporary path, close them, then atomically rename them into the served tree.
 - Point the gateway at a filesystem snapshot or copy when building an index.
