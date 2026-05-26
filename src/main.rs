@@ -25,13 +25,22 @@ async fn main() -> anyhow::Result<()> {
     let config = config::AppConfig::load(&cli.config)?;
 
     match cli.command {
-        Commands::Index { profile: profile_name } => {
+        Commands::Index { profile: profile_name, every } => {
             let profile = config
                 .profiles
                 .iter()
                 .find(|p| p.name == profile_name)
                 .with_context(|| format!("profile not found: {profile_name}"))?;
             indexer::run_indexer(profile).await?;
+            if let Some(interval) = every {
+                loop {
+                    info!("next index run in {}s", interval.as_secs());
+                    tokio::time::sleep(interval).await;
+                    if let Err(e) = indexer::run_indexer(profile).await {
+                        error!("indexer error: {e:#}");
+                    }
+                }
+            }
         }
         Commands::Serve => {
             let mut profiles = Vec::new();
