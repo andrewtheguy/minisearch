@@ -48,8 +48,8 @@ impl AppConfig {
         PathBuf::from(&self.work_dir).join(profile_name)
     }
 
-    pub fn load(path: &Path) -> anyhow::Result<Self> {
-        let contents = std::fs::read_to_string(path)
+    pub async fn load(path: &Path) -> anyhow::Result<Self> {
+        let contents = tokio::fs::read_to_string(path).await
             .with_context(|| format!("failed to read config file: {}", path.display()))?;
         Self::from_toml_str(&contents)
             .with_context(|| format!("failed to load config file: {}", path.display()))

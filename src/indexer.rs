@@ -359,7 +359,7 @@ pub async fn run_indexer(profile: &crate::config::ProfileConfig, work_dir: &Path
     if let Some(id) = &bucket_id {
         state["bucket_id"] = serde_json::json!(id);
     }
-    std::fs::write(work_dir.join("state.json"), serde_json::to_string_pretty(&state)?)?;
+    tokio::fs::write(work_dir.join("state.json"), serde_json::to_string_pretty(&state)?).await?;
 
     Ok(())
 }

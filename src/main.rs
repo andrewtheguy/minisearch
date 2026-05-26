@@ -21,7 +21,7 @@ async fn main() -> anyhow::Result<()> {
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
 
     let cli = Cli::parse();
-    let config = config::AppConfig::load(&cli.config)?;
+    let config = config::AppConfig::load(&cli.config).await?;
 
     match cli.command {
         Commands::Index { profile: profile_name, every } => {
