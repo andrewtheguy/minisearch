@@ -27,7 +27,11 @@ pub struct Cli {
 #[derive(Subcommand)]
 pub enum Commands {
     /// Start the web server
-    Serve,
+    Serve {
+        /// Profile name to serve
+        #[arg(short, long)]
+        profile: String,
+    },
     /// Index S3 bucket contents into Tantivy
     Index {
         /// Profile name to index

@@ -13,7 +13,7 @@ use anyhow::Context;
 use axum::{routing::get, Router};
 use clap::Parser;
 use cli::{Cli, Commands};
-use log::{error, info, warn};
+use log::{error, info};
 use state::{AppState, ProfileEntry, ProfileState, SearchState};
 
 #[tokio::main]
@@ -47,29 +47,35 @@ async fn main() -> anyhow::Result<()> {
                 println!("{}\t{}", profile.name, profile.description);
             }
         }
-        Commands::Serve => {
-            let mut profiles = Vec::new();
-            for profile_config in &config.profiles {
-                let s3_client = profile_config.s3_client().await;
-                let work_dir = config.profile_work_dir(&profile_config.name);
-                let index_path = work_dir.join(config::INDEX_DIR);
-                let search = match search::open_index(&index_path) {
-                    Some(index) => {
-                        let reader = index
-                            .reader()
-                            .context("failed to create index reader")?;
-                        let schema = search::build_schema();
-                        Arc::new(RwLock::new(Some(SearchState { reader, schema })))
-                    }
-                    None => {
-                        warn!(
-                            "search index not found at {index_path:?} for profile '{}' — search will be unavailable until index is created",
-                            profile_config.name
-                        );
-                        Arc::new(RwLock::new(None))
-                    }
-                };
-                profiles.push(ProfileEntry {
+        Commands::Serve { profile: profile_name } => {
+            let profile_config = config
+                .profiles
+                .iter()
+                .find(|p| p.name == profile_name)
+                .with_context(|| format!("profile not found: {profile_name}"))?;
+
+            let s3_client = profile_config.s3_client().await;
+            let work_dir = config.profile_work_dir(&profile_name);
+            let index_path = work_dir.join(config::INDEX_DIR);
+
+            s3_client
+                .list_objects_v2()
+                .bucket(&profile_config.s3_bucket_name)
+                .max_keys(1)
+                .send()
+                .await
+                .with_context(|| format!("failed to connect to S3 bucket '{}'", profile_config.s3_bucket_name))?;
+            info!("S3 connectivity verified for bucket '{}'", profile_config.s3_bucket_name);
+
+            let index = search::open_index(&index_path)
+                .ok_or_else(|| anyhow::anyhow!("search index not found at {index_path:?} — run `minisearch index --profile {profile_name}` first"))?;
+            let reader = index.reader().context("failed to create index reader")?;
+            let schema = search::build_schema();
+            let search = Arc::new(RwLock::new(Some(SearchState { reader, schema })));
+            info!("search index loaded from {index_path:?}");
+
+            let state = AppState {
+                profiles: vec![ProfileEntry {
                     name: profile_config.name.clone(),
                     description: profile_config.description.clone(),
                     state: ProfileState {
@@ -78,14 +84,13 @@ async fn main() -> anyhow::Result<()> {
                         work_dir,
                         search,
                     },
-                });
-            }
-
-            let state = AppState { profiles };
+                }],
+            };
 
             let app = Router::new()
+                .route("/", get(handlers::redirect_to_profile))
                 .route("/api/health", get(|| async { "ok" }))
-                .route("/api/profiles", get(handlers::profiles))
+                .route("/api/p/{profile}/info", get(handlers::profile_info))
                 .route("/api/p/{profile}/search", get(handlers::search))
                 .route("/api/p/{profile}/presign", get(handlers::presign))
                 .route("/api/p/{profile}/browse", get(handlers::browse))

@@ -1,13 +1,5 @@
 import { type FormEvent, useCallback, useEffect, useRef, useState } from "react";
-import {
-  Link,
-  Navigate,
-  Route,
-  Routes,
-  useNavigate,
-  useParams,
-  useSearchParams,
-} from "react-router";
+import { Navigate, Route, Routes, useNavigate, useParams, useSearchParams } from "react-router";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
@@ -35,11 +27,6 @@ interface SearchResponse {
   page: number;
   total_pages: number;
   results: SearchResult[];
-}
-
-interface ProfileInfo {
-  name: string;
-  description: string;
 }
 
 interface BrowseFolder {
@@ -118,56 +105,6 @@ function getPageNumbers(current: number, total: number): (number | "ellipsis")[]
   return pages;
 }
 
-function ProfileList() {
-  const [profiles, setProfiles] = useState<ProfileInfo[] | null>(null);
-  const [error, setError] = useState<string | null>(null);
-
-  useEffect(() => {
-    fetch("/api/profiles")
-      .then((res) => {
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        return res.json() as Promise<ProfileInfo[]>;
-      })
-      .then(setProfiles)
-      .catch((err) => setError(err instanceof Error ? err.message : String(err)));
-  }, []);
-
-  return (
-    <div className="mx-auto max-w-4xl px-4 py-8">
-      <h1 className="text-3xl font-bold tracking-tight mb-6">MiniSearch</h1>
-
-      {error && (
-        <Alert variant="destructive" className="mb-4">
-          <AlertDescription>Error: {error}</AlertDescription>
-        </Alert>
-      )}
-
-      {profiles === null && !error && <p className="text-muted-foreground">Loading profiles...</p>}
-
-      {profiles && profiles.length === 0 && (
-        <p className="text-muted-foreground">No profiles configured.</p>
-      )}
-
-      {profiles && profiles.length > 0 && (
-        <div className="space-y-3">
-          {profiles.map((profile) => (
-            <Link key={profile.name} to={`/p/${profile.name}/browse/`} className="block">
-              <Card className="hover:border-primary/50 transition-colors">
-                <CardContent>
-                  <h2 className="text-lg font-semibold">{profile.name}</h2>
-                  {profile.description && (
-                    <p className="text-sm text-muted-foreground mt-1">{profile.description}</p>
-                  )}
-                </CardContent>
-              </Card>
-            </Link>
-          ))}
-        </div>
-      )}
-    </div>
-  );
-}
-
 function BrowseViewGuard() {
   const { profileName, "*": splatPath } = useParams<{ profileName: string; "*": string }>();
   if (!profileName) return <Navigate to="/" replace />;
@@ -178,6 +115,7 @@ function BrowseViewGuard() {
 function BrowseView({ profileName, prefix }: { profileName: string; prefix: string }) {
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
+  const [profileDescription, setProfileDescription] = useState<string>("");
 
   const [folders, setFolders] = useState<BrowseFolder[]>([]);
   const [files, setFiles] = useState<BrowseFile[]>([]);
@@ -260,6 +198,16 @@ function BrowseView({ profileName, prefix }: { profileName: string; prefix: stri
       browseControllerRef.current?.abort();
     };
   }, [fetchBrowsePage]);
+
+  useEffect(() => {
+    fetch(`/api/p/${profileName}/info`)
+      .then((res) =>
+        res.ok ? (res.json() as Promise<{ name: string; description: string }>) : null,
+      )
+      .then((data) => {
+        if (data) setProfileDescription(data.description);
+      });
+  }, [profileName]);
 
   const doSearch = useCallback(
     (q: string, p: number, m: SearchMode, e: string) => {
@@ -370,11 +318,9 @@ function BrowseView({ profileName, prefix }: { profileName: string; prefix: stri
 
   return (
     <div className="mx-auto max-w-4xl px-4 py-8">
-      <div className="flex items-center gap-3 mb-6">
-        <Link to="/" className="text-muted-foreground hover:text-foreground transition-colors">
-          &larr; Profiles
-        </Link>
+      <div className="flex items-baseline gap-3 mb-6">
         <h1 className="text-3xl font-bold tracking-tight">{profileName}</h1>
+        {profileDescription && <span className="text-muted-foreground">{profileDescription}</span>}
       </div>
 
       <form className="flex gap-2 mb-6" onSubmit={handleSearch}>
@@ -683,9 +629,9 @@ function BrowseView({ profileName, prefix }: { profileName: string; prefix: stri
 function App() {
   return (
     <Routes>
-      <Route path="/" element={<ProfileList />} />
       <Route path="/p/:profileName" element={<Navigate to="browse/" replace />} />
       <Route path="/p/:profileName/browse/*" element={<BrowseViewGuard />} />
+      <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>
   );
 }

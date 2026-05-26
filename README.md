@@ -79,14 +79,14 @@ minisearch profiles
 # Build the search index for a profile
 minisearch index --profile my-bucket
 
-# Start the web server (port 52378)
-minisearch serve
+# Start the web server for a profile (port 52378)
+minisearch serve --profile my-bucket
 
 # Or with an explicit config file
-minisearch -c /path/to/config.toml serve
+minisearch -c /path/to/config.toml serve --profile my-bucket
 ```
 
-Run `index` first to download and index all files from the S3 bucket, then `serve` to start the web UI. The default view is an S3 folder browser at `/p/<profile>/browse/` with a search bar for full-text search scoped to the current folder. The server works without an index (browsing works, search returns 503), so you can start serving immediately while building the index separately.
+Run `index` first to download and index all files from the S3 bucket, then `serve` to start the web UI. The server validates S3 connectivity and the search index on startup — if either is unavailable, it fails immediately with a clear error. The home page redirects to `/p/<profile>/browse/` which shows an S3 folder browser with full-text search scoped to the current folder.
 
 ## Development
 
@@ -94,7 +94,7 @@ Start the backend and frontend dev server in separate terminals:
 
 ```bash
 # Terminal 1 — backend (port 52378)
-cargo run -- -c tmp/config.toml serve
+cargo run -- -c tmp/config.toml serve --profile radio-show
 
 # Terminal 2 — frontend (port 5173, proxies API to backend)
 cd frontend

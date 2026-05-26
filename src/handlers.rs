@@ -85,25 +85,30 @@ fn get_or_init_search(state: &ProfileState) -> Result<SearchState, AppError> {
     Ok(search_state)
 }
 
+pub async fn redirect_to_profile(
+    State(state): State<AppState>,
+) -> axum::response::Redirect {
+    let name = &state.profiles[0].name;
+    axum::response::Redirect::temporary(&format!("/p/{name}/browse/"))
+}
+
 #[derive(Serialize)]
-pub struct ProfileInfo {
+pub struct ProfileInfoResponse {
     pub name: String,
     pub description: String,
 }
 
-pub async fn profiles(
+pub async fn profile_info(
     State(state): State<AppState>,
-) -> Json<Vec<ProfileInfo>> {
-    Json(
-        state
-            .profiles
-            .iter()
-            .map(|p| ProfileInfo {
-                name: p.name.clone(),
-                description: p.description.clone(),
-            })
-            .collect(),
-    )
+    Path(profile_name): Path<String>,
+) -> Result<Json<ProfileInfoResponse>, AppError> {
+    let profile = state
+        .get_profile(&profile_name)
+        .ok_or_else(|| AppError::not_found(format!("profile not found: {profile_name}")))?;
+    Ok(Json(ProfileInfoResponse {
+        name: profile.name.clone(),
+        description: profile.description.clone(),
+    }))
 }
 
 pub async fn search(
