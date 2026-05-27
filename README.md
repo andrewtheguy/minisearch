@@ -23,6 +23,50 @@ curl -fsSL https://raw.githubusercontent.com/andrewtheguy/minisearch/main/instal
 
 Supported platforms: Linux (x86_64, arm64), macOS (arm64).
 
+## Docker
+
+```bash
+docker pull ghcr.io/andrewtheguy/minisearch:latest
+```
+
+Mount your config file and a data volume for the work directory. The config's `work_dir` should point to the volume mount path (e.g. `/data`). Use `--bind :52378` so the server is reachable from outside the container.
+
+```bash
+# Build the search index for a profile
+docker run --rm \
+  -v /path/to/config.toml:/config/config.toml \
+  -v minisearch-data:/data \
+  ghcr.io/andrewtheguy/minisearch:latest \
+  -c /config/config.toml index --profile my-bucket
+
+# Start the web server for a profile
+docker run -d \
+  -v /path/to/config.toml:/config/config.toml \
+  -v minisearch-data:/data \
+  -p 52378:52378 \
+  ghcr.io/andrewtheguy/minisearch:latest \
+  -c /config/config.toml serve --profile my-bucket --bind :52378
+```
+
+You can also set the config path via the `MINISEARCH_CONFIG` environment variable instead of `-c`:
+
+```bash
+docker run -d \
+  -e MINISEARCH_CONFIG=/config/config.toml \
+  -v /path/to/config.toml:/config/config.toml \
+  -v minisearch-data:/data \
+  -p 52378:52378 \
+  ghcr.io/andrewtheguy/minisearch:latest \
+  serve --profile my-bucket --bind :52378
+```
+
+To build Docker images locally:
+
+```bash
+./build-docker.sh          # Build binaries for amd64 and arm64
+./build-docker.sh --push   # Also push to GHCR
+```
+
 ## Building from source
 
 ### Prerequisites

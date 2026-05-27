@@ -3,6 +3,9 @@ name: Release
 on:
   workflow_dispatch:
 
+env:
+  GHCR_IMAGE: ghcr.io/andrewtheguy/minisearch
+
 jobs:
   prepare:
     runs-on: ubuntu-latest
@@ -48,10 +51,14 @@ jobs:
         include:
           - runner: ubuntu-latest
             arch: x86_64
+            docker_platform: linux/amd64
           - runner: ubuntu-24.04-arm
             arch: arm64
+            docker_platform: linux/arm64
 
     runs-on: ${{ matrix.runner }}
+    permissions:
+      packages: write
 
     steps:
       - name: Checkout
@@ -84,6 +91,21 @@ jobs:
         with:
           name: minisearch-linux-${{ matrix.arch }}
           path: target/release/minisearch-linux-${{ matrix.arch }}
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push Docker image (using pre-built binary)
+        run: |
+          TAG=${{ needs.prepare.outputs.tag }}
+          # Copy binary to build context root for Dockerfile
+          cp target/release/minisearch-linux-${{ matrix.arch }} minisearch
+          docker build --target runtime-prebuilt -t ${{ env.GHCR_IMAGE }}:${TAG}-${{ matrix.arch }} .
+          docker push ${{ env.GHCR_IMAGE }}:${TAG}-${{ matrix.arch }}
 
   build-macos:
     needs: prepare
@@ -127,6 +149,7 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
+      packages: write
 
     steps:
       - name: Download all artifacts
@@ -142,3 +165,27 @@ jobs:
           name: ${{ needs.prepare.outputs.tag }}
           files: artifacts/*
           prerelease: ${{ needs.prepare.outputs.is_prerelease == 'true' }}
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Create and push multi-arch manifest
+        run: |
+          TAG=${{ needs.prepare.outputs.tag }}
+          # Create manifest combining both architectures
+          docker manifest create ${{ env.GHCR_IMAGE }}:${TAG} \
+            ${{ env.GHCR_IMAGE }}:${TAG}-x86_64 \
+            ${{ env.GHCR_IMAGE }}:${TAG}-arm64
+          docker manifest push ${{ env.GHCR_IMAGE }}:${TAG}
+
+          # Only tag as latest on non-prerelease (main branch) builds
+          if [ "${{ needs.prepare.outputs.is_prerelease }}" = "false" ]; then
+            docker manifest create ${{ env.GHCR_IMAGE }}:latest \
+              ${{ env.GHCR_IMAGE }}:${TAG}-x86_64 \
+              ${{ env.GHCR_IMAGE }}:${TAG}-arm64
+            docker manifest push ${{ env.GHCR_IMAGE }}:latest
+          fi
