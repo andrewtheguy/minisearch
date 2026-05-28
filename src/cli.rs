@@ -52,6 +52,12 @@ pub enum Commands {
         #[arg(short, long)]
         profile: Option<String>,
     },
+    /// Run the server preflight check and exit (for container readiness probes)
+    Check {
+        /// Profile name to check
+        #[arg(short, long)]
+        profile: String,
+    },
 }
 
 const DEFAULT_PORT: u16 = 52378;
