@@ -60,7 +60,7 @@ Configuration is loaded from a TOML file (`-c`/`--config` flag or `MINISEARCH_CO
 | `webdav.rs` | Minimal async WebDAV client — PROPFIND parsing, recursive directory traversal, GET/HEAD |
 | `search.rs` | Tantivy schema definition, tokenizer registration, index open/create |
 | `indexer.rs` | Backend object listing, content downloading, incremental index updates |
-| `handlers.rs` | Axum request handlers for profile listing, search, browse, presign, and health endpoints |
+| `server.rs` | Axum request handlers for profile listing, search, browse, presign, and health endpoints |
 | `error.rs` | `AppError` enum — maps error variants to HTTP status codes |
 | `assets.rs` | Embedded frontend asset serving with SPA fallback |
 

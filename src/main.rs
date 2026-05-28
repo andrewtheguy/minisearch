@@ -3,12 +3,13 @@ mod backend;
 mod cli;
 mod config;
 mod error;
-mod handlers;
+mod server;
 mod indexer;
 mod search;
 mod state;
 mod webdav;
 
+use std::path::PathBuf;
 use std::sync::{Arc, RwLock};
 
 use anyhow::Context;
@@ -18,6 +19,60 @@ use cli::{Cli, Commands};
 use log::{error, info};
 use rand::Rng;
 use state::{AppState, ProfileEntry, ProfileState, SearchState};
+
+struct Preflight {
+    backend: backend::Backend,
+    work_dir: PathBuf,
+    search: Arc<RwLock<SearchState>>,
+    name: String,
+    description: String,
+}
+
+/// Verify a profile is ready to serve: backend connectivity (optional), index
+/// state, and a loadable search index. Shared by `serve` (before binding, with
+/// connectivity) and `check-index-ready` (without connectivity).
+async fn preflight(
+    config: &config::AppConfig,
+    profile_name: &str,
+    check_connectivity: bool,
+) -> anyhow::Result<Preflight> {
+    let profile_config = config
+        .profiles
+        .iter()
+        .find(|p| p.name == profile_name)
+        .with_context(|| format!("profile not found: {profile_name}"))?;
+
+    let backend = profile_config.build_backend().await?;
+    let work_dir = config.profile_work_dir(profile_name);
+    let index_path = work_dir.join(config::INDEX_DIR);
+
+    if check_connectivity {
+        backend.check_connectivity().await
+            .with_context(|| format!("failed to verify {} connectivity", profile_config.backend))?;
+        info!("{} connectivity verified", profile_config.backend);
+    }
+
+    let index_state = state::read_state(&work_dir).await
+        .ok_or_else(|| anyhow::anyhow!("state.json not found or not parseable at {work_dir:?} — run `minisearch index --profile {profile_name}` first"))?;
+    let last_indexed = index_state.last_indexed.as_deref()
+        .ok_or_else(|| anyhow::anyhow!("index build not complete at {work_dir:?} — wait for `minisearch index --profile {profile_name}` to finish"))?;
+    info!("last indexed: {last_indexed}, bucket_id: {:?}", index_state.bucket_id);
+
+    let index = search::open_index(&index_path)
+        .ok_or_else(|| anyhow::anyhow!("search index not found at {index_path:?} — run `minisearch index --profile {profile_name}` first"))?;
+    let reader = index.reader().context("failed to create index reader")?;
+    let schema = search::build_schema();
+    let search = Arc::new(RwLock::new(SearchState { reader, schema }));
+    info!("search index loaded from {index_path:?}");
+
+    Ok(Preflight {
+        backend,
+        work_dir,
+        search,
+        name: profile_config.name.clone(),
+        description: profile_config.description.clone(),
+    })
+}
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -74,56 +129,37 @@ async fn main() -> anyhow::Result<()> {
                 println!();
             }
         }
+        Commands::CheckIndexReady { profile: profile_name } => {
+            preflight(&config, &profile_name, false).await?;
+            println!("ready");
+        }
         Commands::Serve { profile: profile_name, bind } => {
-            let profile_config = config
-                .profiles
-                .iter()
-                .find(|p| p.name == profile_name)
-                .with_context(|| format!("profile not found: {profile_name}"))?;
-
-            let backend = profile_config.build_backend().await?;
-            let work_dir = config.profile_work_dir(&profile_name);
-            let index_path = work_dir.join(config::INDEX_DIR);
-
-            backend.check_connectivity().await
-                .with_context(|| format!("failed to verify {} connectivity", profile_config.backend))?;
-            info!("{} connectivity verified", profile_config.backend);
-
-            let index_state = state::read_state(&work_dir).await
-                .ok_or_else(|| anyhow::anyhow!("state.json not found or not parseable at {work_dir:?} — run `minisearch index --profile {profile_name}` first"))?;
-            info!("last indexed: {}, bucket_id: {:?}", index_state.last_indexed, index_state.bucket_id);
-
-            let index = search::open_index(&index_path)
-                .ok_or_else(|| anyhow::anyhow!("search index not found at {index_path:?} — run `minisearch index --profile {profile_name}` first"))?;
-            let reader = index.reader().context("failed to create index reader")?;
-            let schema = search::build_schema();
-            let search = Arc::new(RwLock::new(SearchState { reader, schema }));
-            info!("search index loaded from {index_path:?}");
+            let pf = preflight(&config, &profile_name, true).await?;
 
             let signing_secret: [u8; 32] = rand::rng().random();
 
             let state = AppState {
                 profile: ProfileEntry {
-                    name: profile_config.name.clone(),
-                    description: profile_config.description.clone(),
+                    name: pf.name,
+                    description: pf.description,
                     state: ProfileState {
-                        backend,
-                        work_dir,
-                        search,
+                        backend: pf.backend,
+                        work_dir: pf.work_dir,
+                        search: pf.search,
                     },
                 },
                 signing_secret,
             };
 
             let app = Router::new()
-                .route("/", get(handlers::redirect_to_profile))
-                .route("/api/default-profile", get(handlers::default_profile))
+                .route("/", get(server::redirect_to_profile))
+                .route("/api/default-profile", get(server::default_profile))
                 .route("/api/health", get(|| async { "ok" }))
-                .route("/api/p/{profile}/info", get(handlers::profile_info))
-                .route("/api/p/{profile}/search", get(handlers::search))
-                .route("/api/p/{profile}/presign", get(handlers::presign))
-                .route("/api/p/{profile}/fetch", get(handlers::fetch))
-                .route("/api/p/{profile}/browse", get(handlers::browse))
+                .route("/api/p/{profile}/info", get(server::profile_info))
+                .route("/api/p/{profile}/search", get(server::search))
+                .route("/api/p/{profile}/presign", get(server::presign))
+                .route("/api/p/{profile}/fetch", get(server::fetch))
+                .route("/api/p/{profile}/browse", get(server::browse))
                 .with_state(state)
                 .fallback(assets::static_handler);
 

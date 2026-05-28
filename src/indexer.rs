@@ -193,7 +193,7 @@ pub async fn run_indexer(
     let index = search::open_or_create_index(&index_path, &search_schema.schema).await?;
 
     if state.is_none() {
-        write_state(work_dir, backend.backend_name(), &bucket_id, "in progress").await?;
+        write_state(work_dir, backend.backend_name(), &bucket_id, None).await?;
         info!("created initial state.json");
     }
 
@@ -318,7 +318,8 @@ pub async fn run_indexer(
     info!("  removed:              {removed}");
     info!("  failed:               {failed}");
 
-    write_state(work_dir, backend.backend_name(), &bucket_id, &chrono::Utc::now().to_rfc3339()).await?;
+    let now = chrono::Utc::now().to_rfc3339();
+    write_state(work_dir, backend.backend_name(), &bucket_id, Some(&now)).await?;
 
     Ok(())
 }
@@ -327,12 +328,14 @@ async fn write_state(
     work_dir: &Path,
     backend_name: &str,
     bucket_id: &Option<String>,
-    last_indexed: &str,
+    last_indexed: Option<&str>,
 ) -> anyhow::Result<()> {
     let mut state = serde_json::json!({
-        "last_indexed": last_indexed,
         "backend": backend_name,
     });
+    if let Some(ts) = last_indexed {
+        state["last_indexed"] = serde_json::json!(ts);
+    }
     if let Some(id) = bucket_id {
         state["bucket_id"] = serde_json::json!(id);
     }
@@ -583,7 +586,7 @@ mod tests {
     #[test]
     fn backend_consistency_ok_when_matching() {
         let state = crate::state::IndexState {
-            last_indexed: "2025-01-01T00:00:00Z".to_string(),
+            last_indexed: Some("2025-01-01T00:00:00Z".to_string()),
             bucket_id: None,
             backend: Some("s3".to_string()),
         };
@@ -598,7 +601,7 @@ mod tests {
     #[test]
     fn backend_consistency_ok_when_state_has_no_backend() {
         let state = crate::state::IndexState {
-            last_indexed: "2025-01-01T00:00:00Z".to_string(),
+            last_indexed: Some("2025-01-01T00:00:00Z".to_string()),
             bucket_id: None,
             backend: None,
         };
@@ -608,7 +611,7 @@ mod tests {
     #[test]
     fn backend_consistency_fails_on_mismatch() {
         let state = crate::state::IndexState {
-            last_indexed: "2025-01-01T00:00:00Z".to_string(),
+            last_indexed: Some("2025-01-01T00:00:00Z".to_string()),
             bucket_id: None,
             backend: Some("s3".to_string()),
         };

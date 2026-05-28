@@ -52,6 +52,12 @@ pub enum Commands {
         #[arg(short, long)]
         profile: Option<String>,
     },
+    /// Check the search index is ready to serve, skipping the backend connectivity check (for container readiness probes)
+    CheckIndexReady {
+        /// Profile name to check
+        #[arg(short, long)]
+        profile: String,
+    },
 }
 
 const DEFAULT_PORT: u16 = 52378;
