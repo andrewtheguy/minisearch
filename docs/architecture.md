@@ -216,12 +216,14 @@ The search index and backend connectivity are validated on startup. The server r
 ### Single binary build
 
 ```
-frontend/src/ ──► vite build ──► frontend/dist/ ──► rust-embed ──► cargo build ──► minisearch binary
+cargo build --release ──► build.rs ──► bun run build ──► $OUT_DIR/frontend-dist ──► rust-embed ──► minisearch binary
 ```
 
-The frontend is built first, then `rust-embed` bundles the `frontend/dist/` directory into the Rust binary at compile time.
+`build.rs` only stages the frontend for the `release` profile (or when `MINISEARCH_EMBED_FRONTEND=1`). When it does, it emits `cfg(embed_frontend)` and `src/assets.rs` compiles the bundle in with `rust-embed`; otherwise the fallback handler returns a 404 pointing at the Vite dev server. `MINISEARCH_PREBUILT_FRONTEND=<dir>` copies an already built bundle instead of running bun — release CI builds the frontend once in its own job and every target embeds the same bytes. The build fails if the staged bundle has no `index.html`.
 
 ### Development
+
+Dev builds (`cargo build`, bacon, clippy, tests, rust-analyzer) never run bun, so backend rebuilds are unaffected by the frontend.
 
 ```bash
 # Backend (default bind: localhost:52378)

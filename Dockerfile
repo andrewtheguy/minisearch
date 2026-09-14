@@ -21,10 +21,9 @@ WORKDIR /build
 # Copy source code
 COPY . .
 
-# Build frontend first (outside of cargo cache to ensure it always exists)
-RUN cd frontend && bun install --frozen-lockfile && bun run build
+RUN cd frontend && bun install --frozen-lockfile
 
-# Build the release binary with architecture-specific cache mounts
+# Build the release binary (build.rs builds and embeds the frontend) with architecture-specific cache mounts
 RUN --mount=type=cache,target=/usr/local/cargo/registry,id=cargo-registry-v2-${TARGETARCH} \
     --mount=type=cache,target=/build/target,id=cargo-target-v2-${TARGETARCH} \
     cargo build --release --locked && \

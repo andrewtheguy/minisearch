@@ -1,6 +1,6 @@
 [package]
 name = "minisearch"
-version = "0.0.16"
+version = "0.0.17"
 edition = "2024"
 
 [dependencies]
@@ -10,7 +10,10 @@ aws-config = { version = "1", features = ["behavior-version-latest"] }
 aws-sdk-s3 = "1"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-rust-embed = "8.11.0"
+# Only used when build.rs sets cfg(embed_frontend): `debug-embed` so a forced
+# embed in a non-release build is really compiled in, `interpolate-folder-path`
+# to read the bundle from Cargo's OUT_DIR.
+rust-embed = { version = "8.11.0", features = ["debug-embed", "interpolate-folder-path"] }
 new_mime_guess = "4"
 tantivy = "0.26.1"
 clap = { version = "4", features = ["derive", "env"] }
@@ -31,6 +34,9 @@ rand = "0.9"
 hmac = "0.12"
 sha2 = "0.10"
 hex = "0.4"
+
+[build-dependencies]
+anyhow = "1"
 
 [dev-dependencies]
 tempfile = "3"
