@@ -1,8 +1,1 @@
-- no backward compatibility since it is a personal project
-- no cargo fmt
-- run cargo clippy with `-- -D warnings` to treat warnings as errors and cargo test after rust code changes
-- run biome checks on frontend/ after JS/TS code changes
-- use tmp/ for temporary files and test config toml
-- error handling: `anyhow` for application errors (main, indexer, search), `thiserror` for typed API errors (`AppError` in `src/error.rs`); internal errors return generic "internal server error" to clients, detailed chain logged to stderr
-- architectural doc is in `docs/architecture.md`
-- use async rust api by default
+@AGENTS.md
