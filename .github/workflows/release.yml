@@ -44,8 +44,30 @@ jobs:
           echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
           echo "is_prerelease=${IS_PRERELEASE}" >> "$GITHUB_OUTPUT"
 
-  build-linux:
+  # Built once and embedded by every target via MINISEARCH_PREBUILT_FRONTEND.
+  build-frontend:
     needs: prepare
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+
+      - name: Install frontend dependencies
+        run: cd frontend && bun install --frozen-lockfile
+
+      - name: Build frontend
+        run: cd frontend && bun run build
+
+      - name: Upload frontend
+        uses: actions/upload-artifact@v4
+        with:
+          name: frontend-dist
+          path: frontend/dist
+
+  build-linux:
+    needs: [prepare, build-frontend]
     strategy:
       matrix:
         include:
@@ -64,13 +86,11 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - uses: oven-sh/setup-bun@v2
-
-      - name: Install frontend dependencies
-        run: cd frontend && bun install --frozen-lockfile
-
-      - name: Build frontend
-        run: cd frontend && bun run build
+      - name: Download frontend
+        uses: actions/download-artifact@v4
+        with:
+          name: frontend-dist
+          path: tmp/frontend-dist
 
       - name: Rust cache
         uses: Swatinem/rust-cache@v2
@@ -81,6 +101,8 @@ jobs:
           sudo apt-get install -y clang mold cmake pkg-config
 
       - name: Build
+        env:
+          MINISEARCH_PREBUILT_FRONTEND: tmp/frontend-dist
         run: cargo build --release --locked
 
       - name: Rename binary
@@ -108,7 +130,7 @@ jobs:
           docker push ${{ env.GHCR_IMAGE }}:${TAG}-${{ matrix.arch }}
 
   build-macos:
-    needs: prepare
+    needs: [prepare, build-frontend]
     strategy:
       matrix:
         include:
@@ -121,18 +143,18 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - uses: oven-sh/setup-bun@v2
-
-      - name: Install frontend dependencies
-        run: cd frontend && bun install --frozen-lockfile
-
-      - name: Build frontend
-        run: cd frontend && bun run build
+      - name: Download frontend
+        uses: actions/download-artifact@v4
+        with:
+          name: frontend-dist
+          path: tmp/frontend-dist
 
       - name: Rust cache
         uses: Swatinem/rust-cache@v2
 
       - name: Build
+        env:
+          MINISEARCH_PREBUILT_FRONTEND: tmp/frontend-dist
         run: cargo build --release --locked
 
       - name: Rename binary
@@ -156,6 +178,7 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           path: artifacts
+          pattern: minisearch-*
           merge-multiple: true
 
       - name: Create release

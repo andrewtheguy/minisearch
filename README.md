@@ -166,19 +166,21 @@ Open http://localhost:5173. API requests (`/api/*`) are proxied to the backend.
 
 You can also use `bacon` for auto-rebuilding the backend on file changes.
 
+Dev (non-release) builds never run bun or embed the frontend, so backend rebuilds stay fast; opening the backend port directly shows a hint to use the Vite dev server.
+
 ## Production
 
-Frontend assets are embedded into the Rust binary at compile time via `rust-embed`, producing a single self-contained executable.
+Release builds embed the frontend into the Rust binary via `rust-embed`, producing a single self-contained executable. `build.rs` runs `bun run build` into Cargo's `OUT_DIR` automatically:
 
 ```bash
-cd frontend
-bun run build           # outputs to frontend/dist/
-
-cd ..
-cargo build --release   # embeds frontend/dist/ into the binary
+cd frontend && bun install --frozen-lockfile && cd ..
+cargo build --release
 ```
 
 The resulting binary at `target/release/minisearch` serves the SPA with no external files needed.
+
+- `MINISEARCH_PREBUILT_FRONTEND=<dir>` embeds an already built bundle instead of running bun (used by release CI).
+- `MINISEARCH_EMBED_FRONTEND=1` embeds the frontend in a dev build too.
 
 ## Guides
 
